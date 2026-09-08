@@ -136,20 +136,29 @@ public class AdvancedSettingsFragment extends BaseXmlSettingsFragment
   {
     boolean configured = !Config.getTrafficServerUrl().isEmpty();
 
-    // Disconnect is only offered once there is something to disconnect from, so the option list
-    // stays two items long in the common case.
+    // With no server yet, deploying leads: there is otherwise nothing in the app telling you that
+    // traffic needs a server at all, let alone where to get one. Covering an area and
+    // disconnecting only make sense once one exists.
     CharSequence[] options = configured ? new CharSequence[] {getString(R.string.traffic_server_scan),
                                                               getString(R.string.traffic_server_manual),
                                                               getString(R.string.traffic_server_cover_area),
                                                               getString(R.string.traffic_server_disconnect)}
-                                        : new CharSequence[] {getString(R.string.traffic_server_scan),
+                                        : new CharSequence[] {getString(R.string.traffic_server_deploy),
+                                                              getString(R.string.traffic_server_scan),
                                                               getString(R.string.traffic_server_manual)};
 
     new MaterialAlertDialogBuilder(requireContext())
         .setTitle(R.string.traffic_server_title)
         .setItems(options,
                   (dialog, which) -> {
-                    switch (which)
+                    // The unconfigured list leads with Deploy, so everything after it shifts.
+                    if (!configured && which == 0)
+                    {
+                      showDeployPrompt();
+                      return;
+                    }
+                    final int action = configured ? which : which - 1;
+                    switch (action)
                     {
                     case 0:
                       startActivity(new Intent(requireContext(), TrafficPairingActivity.class));
@@ -167,6 +176,24 @@ public class AdvancedSettingsFragment extends BaseXmlSettingsFragment
                     }
                   })
         .setNegativeButton(R.string.cancel, null)
+        .show();
+  }
+
+  /**
+   * Hands off to Cloudflare's deploy flow in a browser.
+   * <p>
+   * Deliberately a hand-off rather than deploying from the app: Cloudflare authenticates the user
+   * in its own flow, so no cloud credential ever reaches the phone. The deploy finishes with a
+   * pairing code to scan back here.
+   */
+  private void showDeployPrompt()
+  {
+    new MaterialAlertDialogBuilder(requireContext())
+        .setTitle(R.string.traffic_server_deploy)
+        .setMessage(R.string.traffic_server_deploy_summary)
+        .setNegativeButton(R.string.cancel, null)
+        .setPositiveButton(R.string.ok,
+                           (d, w) -> Utils.openUrl(requireContext(), getString(R.string.traffic_server_deploy_url)))
         .show();
   }
 

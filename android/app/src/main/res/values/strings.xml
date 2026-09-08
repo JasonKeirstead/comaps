@@ -1069,6 +1069,10 @@
     <string name="traffic_server_summary_none">Not configured</string>
     <!-- Explains what the setting is for, shown in the setup dialog -->
     <string name="traffic_server_message">Live traffic needs a server you run yourself. Pair with it by scanning the QR code it shows, or enter its address by hand.</string>
+    <!-- Button: set up a new traffic server in the user's own cloud account -->
+    <string name="traffic_server_deploy">Deploy a server</string>
+    <!-- Explains what deploying does, shown under the option -->
+    <string name="traffic_server_deploy_summary">Opens your browser to create a traffic server in your own Cloudflare account. You will need a free TomTom API key.</string>
     <!-- Button: open the camera to scan a pairing QR code -->
     <string name="traffic_server_scan">Scan QR code</string>
     <!-- Title of the QR scanning screen -->

@@ -51,6 +51,12 @@
   <!-- These two values are native settings:: keys read by libs/traffic; never translate them. -->
   <string name="pref_traffic_server_url" translatable="false">TrafficServerUrl</string>
   <string name="pref_traffic_api_key" translatable="false">TrafficApiKey</string>
+  <!--
+    One-click deploy for the traffic service. Points at this fork because Cloudflare's deploy
+    flow only accepts GitHub and GitLab; a downstream distributor should point it at their own
+    mirror of tools/traffic_server.
+  //-->
+  <string name="traffic_server_deploy_url" translatable="false">https://deploy.workers.cloudflare.com/?url=https://github.com/JasonKeirstead/comaps/tree/main/tools/traffic_server</string>
   <string name="pref_speedlimit" translatable="false">pref_speedlimit</string>
   <string name="pref_open_external_links" translatable="false">pref_external_links</string>
   <string name="pref_nav_menu_final_destination" translatable="false">pref_nav_menu_final_destination</string>
