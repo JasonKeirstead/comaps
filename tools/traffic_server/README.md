@@ -15,7 +15,7 @@ src/core/index/     .cmti reader and the grid lookup used to match incidents to 
 src/core/providers/ TomTom incidents
 src/core/           pipeline, etag, auth, pairing, config, speed groups
 src/http/router.ts  Request -> Response, runtime-agnostic
-src/storage/        filesystem (container) and R2+KV (Cloudflare)
+src/storage/        filesystem (container), KV, and KV+R2 (Cloudflare)
 src/entry/          worker.ts (fetch + scheduled), node.ts (http + timer), cli.ts (operator)
 ```
 
@@ -84,6 +84,7 @@ If you change anything under `src/core/wire/`, run both.
 |---|---|---|
 | GET | `{base}{version}/{Country}.traffic` | values; 200 with `ETag`, 304, or 404 with a bare integer |
 | GET | `{base}{version}/{Country}.traffic.keys` | keys blob, served verbatim |
+| POST | `/v1/index` | upload a `.cmti` for one (country, map version); device key, not admin |
 | POST | `/v1/pair` | redeem a pairing token for an API key |
 | POST | `/admin/pairing-token` | mint a single-use token (admin) |
 | GET | `/admin/devices` · DELETE `/admin/devices/{id}` | list and revoke (admin) |
@@ -91,6 +92,56 @@ If you change anything under `src/core/wire/`, run both.
 
 Client paths are matched from the end, since the operator chooses the mount point. The version
 segment is absent when the map version is 0.
+
+## Storage backends
+
+Three implementations of one `Storage` interface (`src/storage/types.ts`), covering blobs
+(indexes, generated bodies) and small mutable state (pairing tokens, device keys, demand records,
+the quota counter).
+
+| | Blobs | State |
+|---|---|---|
+| `FsStorage` | disk | disk |
+| `KvStorage` | KV | KV |
+| `R2KvStorage` | R2 | KV |
+
+`KvStorage` is the Cloudflare default, and `R2KvStorage` extends it, overriding only the blob
+methods. `worker.ts` picks between them on whether an `R2_INDEX` binding exists, so enabling R2 is
+a config change rather than a code change.
+
+KV by default because R2's free tier sits behind a subscription step that a plain free account has
+not been through, and the deploy fails outright without it. The objects are small enough to make
+this uninteresting: a whole-region index is ~400 KB, a generated body a few KB, against a 25 MiB
+KV value limit.
+
+What KV does cost is write quota -- 1,000/day on the free plan. `validateConfig` checks the
+configured refresh interval and area ceiling against `TRAFFIC_DAILY_WRITE_BUDGET` at startup, so a
+bad combination fails immediately rather than as writes being rejected mid-afternoon while
+`/healthz` still reports healthy. The container leaves that budget at `0`, meaning unlimited.
+
+Two consequences of KV being eventually consistent are already handled, and are easy to
+reintroduce: `refreshAll` keeps its provider-quota count in a local across the tick rather than
+re-reading it per area (a re-read would not see the previous iteration's write), and writes it
+once at the end. `listAll` follows the list cursor, because KV pages at 1000 keys.
+
+## Where areas come from
+
+`src/core/demand.ts`. Areas are not declared; they are observed. An authorised request for
+`{version}/{Country}.traffic` records a demand entry, `activeAreas` returns the entries seen
+within `DEMAND_TTL_SECONDS` (one hour), plus anything pinned in `TRAFFIC_AREAS`, sorted by
+recency and capped at `TRAFFIC_MAX_ACTIVE_AREAS`.
+
+This exists because coverage is per (country, map version), and the map version changes under you
+every time the user updates maps. A static list goes stale silently and spends provider quota on
+areas nobody is looking at. `recordDemand` skips the write when the existing record is less than
+half a TTL old, which is what keeps the write cost near one per area per hour rather than one per
+client poll.
+
+`POST /v1/index` is the other half: the phone builds a `.cmti` from the map it already has and
+uploads it, authenticated with its own pairing key, so no cloud credential ever lands on a device.
+The upload is parsed and cross-checked against the `x-traffic-country` and `x-traffic-map-version`
+headers before it is stored -- a mismatch here becomes a key-count mismatch on the client, which
+discards the payload without reporting anything.
 
 ## Adding a provider
 

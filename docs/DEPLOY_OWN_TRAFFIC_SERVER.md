@@ -22,10 +22,14 @@ map it already has.
 
 [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/JasonKeirstead/comaps/tree/main/tools/traffic_server)
 
-The button forks the repo, creates the R2 bucket and KV namespace, prompts for two secrets
-(`TOMTOM_API_KEY` and `TRAFFIC_ADMIN_TOKEN` — the latter can be any long random string), and
-deploys. Cloudflare does the authenticating in its own browser flow, so no API token is handed to
-anything.
+The button forks the repo, creates the KV namespace, prompts for two secrets (`TOMTOM_API_KEY` and
+`TRAFFIC_ADMIN_TOKEN` — the latter can be any long random string), and deploys. Cloudflare does the
+authenticating in its own browser flow, so no API token is handed to anything.
+
+**This works on a free Workers account.** The service stores everything in KV, which the free plan
+includes; it does not require R2, whose free tier is behind a separate subscription step. An index
+is a few hundred KB and a generated body a few KB, against KV's 25 MiB per-value limit. See
+[Budgeting](#budgeting) if you later want more areas than the free write quota allows.
 
 Note the worker URL when it finishes; you need it in step 2.
 
@@ -111,21 +115,35 @@ The server handles this by following what your phones actually ask for:
 Nothing to edit when you download a new region. `TRAFFIC_AREAS` still exists if you want to pin
 areas that must always stay fresh, but it is no longer the complete list.
 
-## Budgeting provider requests
+## Budgeting
 
-One provider request per active area per refresh:
+Two ceilings apply, and on Cloudflare's free plan the storage one binds first.
+
+**Provider requests** — one per active area per refresh:
 
 ```
 requests/day = 86400 / TRAFFIC_REFRESH_SECONDS × active areas
 ```
 
-At the default 300 s that is 288 per area per day, so a 2,500/day free tier supports about eight —
-which is why `TRAFFIC_MAX_ACTIVE_AREAS` defaults to 8. The service refuses to start if the ceiling
-and interval together exceed `TRAFFIC_DAILY_REQUEST_BUDGET`, and `/healthz` reports how much of
-today's budget has been used.
+At 300 s that is 288 per area per day, so TomTom's 2,500/day free tier supports six or so. The
+service refuses to start if the ceiling and interval together exceed
+`TRAFFIC_DAILY_REQUEST_BUDGET`, and `/healthz` reports how much of today's budget has been used.
+
+**Storage writes** — a refresh tick writes one value per area plus one counter. Cloudflare's free
+plan allows 1,000 KV writes/day, so the deployed defaults are a 600 s refresh and
+`TRAFFIC_MAX_ACTIVE_AREAS=5`: 864 writes/day. `TRAFFIC_DAILY_WRITE_BUDGET` is checked at startup
+too, so a bad combination fails immediately instead of half a day later. Set it to `0` for no
+limit — that is what the Docker deployment does, since disk has no such ceiling.
 
 Do not go below 60 s. The app polls once a minute and treats data older than six minutes as
 outdated, so a faster refresh buys nothing and just burns quota.
+
+### If you want more areas, or a faster refresh
+
+Enable R2 on your Cloudflare account, uncomment the `[[r2_buckets]]` block in `wrangler.toml`,
+raise `TRAFFIC_DAILY_WRITE_BUDGET`, and redeploy. The Worker notices the binding and moves indexes
+and generated bodies to R2, where the volume of writes this service makes costs nothing. KV keeps
+only the small state. No code change.
 
 ## Advanced: preparing coverage on a desktop
 
@@ -149,8 +167,24 @@ generator_tool \
   roads no provider reports on.
 - The tool prints the exact `Country@version` to configure.
 
-Upload it to `index/<mapVersion>/<Country>.cmti` — `wrangler r2 object put` on Cloudflare, or into
-the mounted `data/` directory for Docker.
+Then upload it. The simplest route is the same one the app uses, which works on either
+deployment and needs only a paired key:
+
+```bash
+curl -X POST "https://your-worker.workers.dev/v1/index" \
+  -H "x-api-key: $YOUR_PAIRED_KEY" \
+  -H "x-traffic-country: Belarus_Minsk Region" \
+  -H "x-traffic-map-version: 260906" \
+  --data-binary @"./index/260906/Belarus_Minsk Region.cmti"
+```
+
+Both headers are required, and the server checks them against what it parses out of the file —
+a mismatch is rejected rather than stored, since an index filed under the wrong version produces
+a key-count mismatch that the client discards without explanation. `generator_tool` prints the
+exact `Country@version` to use.
+
+For Docker you can also just drop the file into the mounted `data/` directory at
+`index/<mapVersion>/<Country>.cmti`.
 
 ## Troubleshooting
 
@@ -180,7 +214,7 @@ left uncoloured rather than being claimed as clear.
 ## How it fits together
 
 ```
-phone: Cover this area ──► road data for a bounded area ──► your server (R2 / disk)
+phone: Cover this area ──► road data for a bounded area ──► your server (KV / R2 / disk)
                                                                 │
                           TomTom incidents ───────────────────► refresh (every 5 min)
                                                                 │

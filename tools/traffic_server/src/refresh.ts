@@ -45,9 +45,14 @@ export async function refreshAll(
   // Areas come from what clients have actually asked for, plus anything pinned in config.
   const areas = await activeAreas(storage, config);
 
+  // Counted in memory across the tick rather than re-read per area: KV is eventually consistent,
+  // so a read here would not see the write from the previous iteration and every area in a tick
+  // would charge itself against the same starting number.
+  const startingQuota = Number((await storage.getState(quotaKey())) ?? 0);
+  let used = startingQuota;
+
   for (const area of areas) {
     try {
-      const used = Number((await storage.getState(quotaKey())) ?? 0);
       if (used >= config.dailyRequestBudget) {
         results.push({
           country: area.country,
@@ -83,7 +88,7 @@ export async function refreshAll(
       }
 
       const events = await provider.fetch(index.bbox);
-      await storage.putState(quotaKey(), String(used + 1), 2 * 86400);
+      used += 1;
 
       const generated = generateTraffic(index, events, config.matchOptions);
       await storage.writeGenerated(area.country, area.mapVersion, {
@@ -103,6 +108,13 @@ export async function refreshAll(
     } catch (err) {
       results.push({ country: area.country, mapVersion: area.mapVersion, status: 'failed', detail: err instanceof Error ? err.message : String(err) });
     }
+  }
+
+  // Once per tick rather than once per area. On KV that halves the writes a tick costs, which
+  // matters on a free plan capped at 1,000/day. The cost is that a worker killed mid-tick loses
+  // this tick's count; the provider's own rate limit is the backstop if that ever compounds.
+  if (used !== startingQuota) {
+    await storage.putState(quotaKey(), String(used), 2 * 86400);
   }
 
   return results;

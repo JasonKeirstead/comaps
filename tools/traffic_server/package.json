@@ -24,9 +24,9 @@
     "qrcode": "^1.5.4"
   },
   "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260908.1",
     "@types/qrcode": "^1.5.5",
-    "@cloudflare/workers-types": "^4.20250109.0",
     "typescript": "^5.7.0",
-    "wrangler": "^3.99.0"
+    "wrangler": "^4.130.0"
   }
 }

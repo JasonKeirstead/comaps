@@ -1,31 +1,37 @@
-/** Cloudflare storage: R2 for the index and generated bodies, KV for small mutable state. */
+/**
+ * Cloudflare storage using R2 for the index and generated bodies, KV for small mutable state.
+ *
+ * Optional. R2 needs a subscription step that a free Workers account has not been through, so
+ * the default deployment is KV-only (see kv.ts) and this takes over automatically once an
+ * R2_INDEX binding exists. Worth adding if you outgrow the free plan's 1,000 KV writes/day,
+ * since R2 charges nothing for the volume of writes this service makes.
+ */
 
-import { generatedKey, indexKey, type GeneratedBlob, type Storage } from './types.ts';
+import { KvStorage, type KvBindings } from './kv.ts';
+import { generatedKey, indexKey, type GeneratedBlob } from './types.ts';
 
-export interface CloudflareBindings {
+export interface CloudflareBindings extends KvBindings {
   R2_INDEX: R2Bucket;
-  KV_STATE: KVNamespace;
 }
 
-export class R2KvStorage implements Storage {
+export class R2KvStorage extends KvStorage {
   private readonly bucket: R2Bucket;
-  private readonly kv: KVNamespace;
 
   constructor(bindings: CloudflareBindings) {
+    super(bindings);
     this.bucket = bindings.R2_INDEX;
-    this.kv = bindings.KV_STATE;
   }
 
-  async readIndex(country: string, mapVersion: number): Promise<ArrayBuffer | null> {
+  override async readIndex(country: string, mapVersion: number): Promise<ArrayBuffer | null> {
     const object = await this.bucket.get(indexKey(country, mapVersion));
     return object ? await object.arrayBuffer() : null;
   }
 
-  async writeIndex(country: string, mapVersion: number, body: Uint8Array): Promise<void> {
+  override async writeIndex(country: string, mapVersion: number, body: Uint8Array): Promise<void> {
     await this.bucket.put(indexKey(country, mapVersion), body as unknown as ArrayBuffer);
   }
 
-  async indexVersions(country: string): Promise<number[]> {
+  override async indexVersions(country: string): Promise<number[]> {
     const listed = await this.bucket.list({ prefix: 'index/' });
     const suffix = `/${country}.cmti`;
     const out: number[] = [];
@@ -37,7 +43,7 @@ export class R2KvStorage implements Storage {
     return out.sort((a, b) => b - a);
   }
 
-  async readGenerated(country: string, mapVersion: number): Promise<GeneratedBlob | null> {
+  override async readGenerated(country: string, mapVersion: number): Promise<GeneratedBlob | null> {
     const object = await this.bucket.get(generatedKey(country, mapVersion));
     if (!object) return null;
     const meta = object.customMetadata ?? {};
@@ -51,7 +57,7 @@ export class R2KvStorage implements Storage {
     };
   }
 
-  async writeGenerated(country: string, mapVersion: number, blob: GeneratedBlob): Promise<void> {
+  override async writeGenerated(country: string, mapVersion: number, blob: GeneratedBlob): Promise<void> {
     await this.bucket.put(generatedKey(country, mapVersion), blob.body as unknown as ArrayBuffer, {
       customMetadata: {
         trafficEtag: blob.etag,
@@ -59,24 +65,5 @@ export class R2KvStorage implements Storage {
         coloredSegments: String(blob.coloredSegments),
       },
     });
-  }
-
-  async getState(key: string): Promise<string | null> {
-    return await this.kv.get(key, 'text');
-  }
-
-  async putState(key: string, value: string, ttlSeconds?: number): Promise<void> {
-    // KV rejects TTLs below 60 seconds.
-    const expirationTtl = ttlSeconds ? Math.max(60, Math.ceil(ttlSeconds)) : undefined;
-    await this.kv.put(key, value, expirationTtl ? { expirationTtl } : undefined);
-  }
-
-  async deleteState(key: string): Promise<void> {
-    await this.kv.delete(key);
-  }
-
-  async listState(prefix: string): Promise<string[]> {
-    const listed = await this.kv.list({ prefix });
-    return listed.keys.map((k) => k.name);
   }
 }

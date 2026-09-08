@@ -11,25 +11,44 @@ compatibility_flags = ["nodejs_compat"]
 # blob and compares ETags (~2 ms CPU), which stays inside the free plan's 10 ms budget; the
 # encoding is tens of milliseconds and would not.
 #
-# Keep this interval in step with TRAFFIC_REFRESH_SECONDS, and mind the provider quota: one
-# request per area per tick. At 2,500 TomTom requests/day, */5 supports about 8 areas.
+# Keep this in step with TRAFFIC_REFRESH_SECONDS. The binding constraint on the free plan is
+# KV writes (1,000/day), not the TomTom quota: a tick costs one write per area plus one for the
+# counter, so */10 leaves room for 5 areas where */5 would allow only 2. Incidents persist for
+# tens of minutes, so the extra staleness is not visible on the map.
 [triggers]
-crons = ["*/5 * * * *"]
+crons = ["*/10 * * * *"]
 
-# Deliberately no bucket_name / id here. Wrangler and the Deploy to Cloudflare button create
-# these for you on first deploy, named after the Worker, and write the ids back to this file.
-# Filling them in by hand means the deploy fails until you have created them yourself first.
-[[r2_buckets]]
-binding = "R2_INDEX"
-
+# KV holds everything: the uploaded indexes, the generated bodies, and small mutable state.
+#
+# Deliberately no id here. Wrangler and the Deploy to Cloudflare button create the namespace for
+# you on first deploy, named after the Worker, and write the id back to this file. Filling it in
+# by hand means the deploy fails until you have created it yourself first.
 [[kv_namespaces]]
 binding = "KV_STATE"
+
+# R2 is optional and off by default. It has a free tier, but enabling R2 on an account is a
+# separate subscription step, and the deploy fails outright on an account that has not done it.
+# KV is included in the free plan with no such step, and the objects are small: a whole-region
+# index is ~400 KB and a generated body a few KB, against KV's 25 MiB per-value limit.
+#
+# What KV costs you is write quota -- 1,000/day on the free plan, against one write per area per
+# refresh tick. If you outgrow that, uncomment this and redeploy; the Worker detects the binding
+# and moves indexes and bodies to R2 on its own, leaving only state in KV.
+#
+# [[r2_buckets]]
+# binding = "R2_INDEX"
 
 [vars]
 # The one value you must change: which map, and which map version your phone has.
 TRAFFIC_AREAS = "Belarus_Minsk Region@260906"
-TRAFFIC_REFRESH_SECONDS = "300"
+TRAFFIC_REFRESH_SECONDS = "600"
 TRAFFIC_DAILY_REQUEST_BUDGET = "2000"
+# Workers KV on the free plan allows 1,000 writes/day. The service checks its own settings
+# against this at startup rather than letting writes start failing mid-afternoon. Bind R2
+# (above) and raise this if you want more areas or a faster refresh.
+TRAFFIC_DAILY_WRITE_BUDGET = "1000"
+# 5 areas x 144 ticks/day + 144 counter writes = 864 writes/day, inside the budget above.
+TRAFFIC_MAX_ACTIVE_AREAS = "5"
 TRAFFIC_ALLOW_ANONYMOUS = "false"
 TRAFFIC_SERVER_NAME = "My CoMaps traffic"
 # Leave empty and the service uses the URL the request arrived on, which is what you want on

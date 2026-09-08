@@ -9,14 +9,25 @@
 import { loadConfig, type Env as ConfigEnv } from '../core/config.ts';
 import { handleRequest } from '../http/router.ts';
 import { refreshAll } from '../refresh.ts';
-import { R2KvStorage, type CloudflareBindings } from '../storage/r2-kv.ts';
+import { KvStorage, type KvBindings } from '../storage/kv.ts';
+import { R2KvStorage } from '../storage/r2-kv.ts';
+import type { Storage } from '../storage/types.ts';
 
-type WorkerEnv = CloudflareBindings & ConfigEnv;
+type WorkerEnv = KvBindings & Partial<{ R2_INDEX: R2Bucket }> & ConfigEnv;
+
+/**
+ * KV alone by default, so the Deploy button works on a free account: R2 has a free tier but is
+ * behind a subscription step, and provisioning fails without it. Bind R2_INDEX and this picks it
+ * up with no code change -- worth doing if you outgrow 1,000 KV writes/day.
+ */
+function createStorage(env: WorkerEnv): Storage {
+  return env.R2_INDEX ? new R2KvStorage({ ...env, R2_INDEX: env.R2_INDEX }) : new KvStorage(env);
+}
 
 export default {
   async fetch(request: Request, env: WorkerEnv): Promise<Response> {
     const config = loadConfig(env);
-    const storage = new R2KvStorage(env);
+    const storage = createStorage(env);
     try {
       return await handleRequest(request, { config, storage });
     } catch (err) {
@@ -27,7 +38,7 @@ export default {
 
   async scheduled(_event: ScheduledController, env: WorkerEnv, ctx: ExecutionContext): Promise<void> {
     const config = loadConfig(env);
-    const storage = new R2KvStorage(env);
+    const storage = createStorage(env);
     ctx.waitUntil(
       refreshAll(config, storage).then((results) => {
         for (const r of results) {

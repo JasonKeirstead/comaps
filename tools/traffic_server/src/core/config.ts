@@ -27,6 +27,14 @@ export interface Config {
   refreshSeconds: number;
   /** Hard cap on provider requests per UTC day, to stay inside a free tier. */
   dailyRequestBudget: number;
+  /**
+   * Storage writes allowed per UTC day, or 0 for no limit.
+   *
+   * Only the Cloudflare deployment sets this: the free plan allows 1,000 KV writes/day, which
+   * is a tighter ceiling than the provider budget and would otherwise be discovered as refreshes
+   * quietly failing partway through a day. Disk has no such limit, so the container leaves it 0.
+   */
+  dailyWriteBudget: number;
   /** Serve without an API key. Reasonable on a trusted LAN, not on the public internet. */
   allowAnonymous: boolean;
   /** A fixed key, as an alternative to QR pairing. */
@@ -87,9 +95,12 @@ export function loadConfig(env: Env): Config {
     tomtomApiKey: env.TOMTOM_API_KEY ?? '',
     areas: parseAreas(env.TRAFFIC_AREAS),
     autoDiscoverAreas: bool(env, 'TRAFFIC_AUTO_DISCOVER_AREAS', true),
-    maxActiveAreas: num(env, 'TRAFFIC_MAX_ACTIVE_AREAS', 8),
+    // 6, not 8: at the default 300s that is 1,728 provider requests/day, inside the default
+    // 2,000 budget. 8 needed 2,304 and made the service refuse to start on its own defaults.
+    maxActiveAreas: num(env, 'TRAFFIC_MAX_ACTIVE_AREAS', 6),
     refreshSeconds: num(env, 'TRAFFIC_REFRESH_SECONDS', 300),
     dailyRequestBudget: num(env, 'TRAFFIC_DAILY_REQUEST_BUDGET', 2000),
+    dailyWriteBudget: num(env, 'TRAFFIC_DAILY_WRITE_BUDGET', 0),
     allowAnonymous: bool(env, 'TRAFFIC_ALLOW_ANONYMOUS', false),
     staticApiKey: env.TRAFFIC_API_KEY ?? '',
     adminToken: env.TRAFFIC_ADMIN_TOKEN ?? '',
@@ -131,13 +142,29 @@ export function validateConfig(config: Config): string[] {
   const worstCaseAreas = config.autoDiscoverAreas
     ? Math.max(config.areas.length, config.maxActiveAreas)
     : config.areas.length;
-  const perDay = (86400 / config.refreshSeconds) * worstCaseAreas;
+  const ticksPerDay = 86400 / config.refreshSeconds;
+  const perDay = ticksPerDay * worstCaseAreas;
   if (perDay > config.dailyRequestBudget) {
     errors.push(
       `${worstCaseAreas} area(s) refreshed every ${config.refreshSeconds}s needs ` +
         `${Math.ceil(perDay)} provider requests/day, over the ${config.dailyRequestBudget} budget. ` +
         'Raise TRAFFIC_REFRESH_SECONDS, or lower TRAFFIC_MAX_ACTIVE_AREAS.',
     );
+  }
+
+  // Each refreshed area writes its generated body, and the quota counter is written alongside.
+  // Catching this at startup beats the alternative: KV starts rejecting writes partway through
+  // the day and traffic silently stops updating while every endpoint still looks healthy.
+  if (config.dailyWriteBudget > 0) {
+    const writesPerDay = ticksPerDay * (worstCaseAreas + 1);
+    if (writesPerDay > config.dailyWriteBudget) {
+      errors.push(
+        `${worstCaseAreas} area(s) refreshed every ${config.refreshSeconds}s needs ` +
+          `${Math.ceil(writesPerDay)} storage writes/day, over the ${config.dailyWriteBudget} budget. ` +
+          'Raise TRAFFIC_REFRESH_SECONDS, lower TRAFFIC_MAX_ACTIVE_AREAS, or bind R2 and raise ' +
+          'TRAFFIC_DAILY_WRITE_BUDGET.',
+      );
+    }
   }
   return errors;
 }
