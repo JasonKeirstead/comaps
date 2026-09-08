@@ -12,6 +12,9 @@ public class LayersUtils
     availableLayers.add(Mode.OUTDOORS);
     availableLayers.add(Mode.ISOLINES);
     availableLayers.add(Mode.SUBWAY);
+    // Traffic needs a self-hosted server (Settings -> Advanced -> Traffic server). With none
+    // configured the layer draws nothing, which is why it stayed hidden until now.
+    availableLayers.add(Mode.TRAFFIC);
     return availableLayers;
   }
 }

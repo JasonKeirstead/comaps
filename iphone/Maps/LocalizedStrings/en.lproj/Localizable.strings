@@ -923,3 +923,34 @@
 /* To indicate the number of charging spaces */
 "capacity_charging_yes" = "Has spaces with chargers";
 "capacity_charging_no" = "No spaces with chargers";
+
+/* Self-hosted traffic server. Traffic data has no default provider: the user runs their own
+   service and pairs the app with it, usually by scanning a QR code. */
+/* Settings entry title */
+"traffic_server_title" = "Traffic server";
+/* Settings entry subtitle, shown when no server has been set up */
+"traffic_server_summary_none" = "Not configured";
+/* Explains what the setting is for */
+"traffic_server_message" = "Live traffic needs a server you run yourself. Pair with it by scanning the QR code it shows, or enter its address by hand.";
+/* Button: open the camera to scan a pairing QR code */
+"traffic_server_scan" = "Scan QR code";
+/* Title of the QR scanning screen */
+"traffic_server_scan_title" = "Scan pairing code";
+/* Instruction shown over the camera preview */
+"traffic_server_scan_hint" = "Point the camera at the pairing code shown by your traffic server";
+/* Section header: type the server address and key instead of scanning */
+"traffic_server_manual" = "Enter manually";
+/* Button: stop using the current traffic server */
+"traffic_server_disconnect" = "Disconnect";
+/* Text field label for the traffic server address */
+"traffic_server_url_hint" = "Server address";
+/* Text field label for the traffic server key */
+"traffic_server_key_hint" = "API key (optional)";
+/* Error shown when the entered address is not a valid http or https URL */
+"traffic_server_url_error" = "Enter an address starting with http:// or https://";
+/* Confirmation after pairing succeeds. %@ is the server name or address */
+"traffic_server_paired" = "Paired with %@";
+/* Shown when pairing fails. %@ is the reason reported by the server */
+"traffic_server_pair_failed" = "Pairing failed: %@";
+/* Reminder that the traffic layer also has to be switched on */
+"traffic_server_enable_hint" = "Turn on the Traffic layer to see the data.";

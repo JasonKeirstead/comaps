@@ -279,6 +279,14 @@ public:
   /// If the driving map mode has traffic
   void DrivingMapModeSetTraffic(bool const hasTraffic);
 
+  /// Base URL of the user's self-hosted traffic service, "" when not configured.
+  std::string TrafficServerUrl() const;
+  /// API key for that service, "" when not configured.
+  std::string TrafficApiKey() const;
+  /// Points the app at a (possibly different) traffic service and drops everything cached from
+  /// the previous one. Pass empty strings to disconnect.
+  void SetTrafficServer(std::string const & url, std::string const & apiKey);
+
   /// If the public transport map mode has transit lines
   bool PublicTransportMapModeHasTransitLines();
 

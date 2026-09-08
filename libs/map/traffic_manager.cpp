@@ -158,6 +158,22 @@ void TrafficManager::OnRecoverSurface()
   Resume();
 }
 
+void TrafficManager::OnServerChanged()
+{
+  {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (!IsEnabled())
+      return;
+    Clear();
+    // A NetworkError left over from the previous server would block all further requests.
+    if (IsInvalidState())
+      ChangeState(TrafficState::Enabled);
+  }
+
+  m_observer.OnTrafficInfoClear();
+  Invalidate();
+}
+
 void TrafficManager::Invalidate()
 {
   if (!IsEnabled())

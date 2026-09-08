@@ -408,10 +408,12 @@ Framework::Framework(FrameworkParams const & params, bool loadMaps)
   editor.SetDelegate(make_unique<search::EditorDelegate>(m_featuresFetcher.GetDataSource()));
   editor.SetInvalidateFn([this]() { InvalidateRect(GetCurrentViewport()); });
 
-  /// @todo Uncomment when we will integrate a traffic provider.
-  // m_trafficManager.SetCurrentDataVersion(m_storage.GetCurrentDataVersion());
-  // m_trafficManager.SetSimplifiedColorScheme(LoadTrafficSimplifiedColors());
-  // m_trafficManager.SetEnabled(MapModeHasTraffic());
+  // Traffic data comes from a user-configured self-hosted service; with none configured
+  // TrafficInfo's requests short-circuit on an empty base URL and this costs nothing.
+  // See docs/DEPLOY_OWN_TRAFFIC_SERVER.md.
+  m_trafficManager.SetCurrentDataVersion(m_storage.GetCurrentDataVersion());
+  m_trafficManager.SetSimplifiedColorScheme(LoadTrafficSimplifiedColors());
+  m_trafficManager.SetEnabled(CurrentMapModeHasTraffic());
 
   m_isolinesManager.SetEnabled(HasContourLinesLayer());
 
@@ -2784,6 +2786,43 @@ void Framework::DrivingMapModeSetTraffic(bool const hasTraffic)
 
   settings::Set(kMapModeDrivingTrafficKey, hasTraffic);
   RefreshForMapMode();
+}
+
+std::string Framework::TrafficServerUrl() const
+{
+  std::string url;
+  if (!settings::Get(settings::kTrafficServerUrl, url))
+    url.clear();
+  return url;
+}
+
+std::string Framework::TrafficApiKey() const
+{
+  std::string key;
+  if (!settings::Get(settings::kTrafficApiKey, key))
+    key.clear();
+  return key;
+}
+
+void Framework::SetTrafficServer(std::string const & url, std::string const & apiKey)
+{
+  std::string normalizedUrl = url;
+  strings::Trim(normalizedUrl);
+  if (!normalizedUrl.empty() && normalizedUrl.back() != '/')
+    normalizedUrl += '/';
+
+  std::string normalizedKey = apiKey;
+  strings::Trim(normalizedKey);
+
+  if (normalizedUrl == TrafficServerUrl() && normalizedKey == TrafficApiKey())
+    return;
+
+  settings::Set(settings::kTrafficServerUrl, normalizedUrl);
+  settings::Set(settings::kTrafficApiKey, normalizedKey);
+
+  LOG(LINFO, ("Traffic server set to", normalizedUrl.empty() ? "<none>" : normalizedUrl));
+
+  m_trafficManager.OnServerChanged();
 }
 
 bool Framework::PublicTransportMapModeHasTransitLines()

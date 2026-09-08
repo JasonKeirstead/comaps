@@ -1,0 +1,12 @@
+services:
+  traffic:
+    build: .
+    image: comaps-traffic
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "8080:8080"
+    volumes:
+      # Holds the .cmti indexes you build offline, generated bodies, and pairing state.
+      # Copy your indexes into ./data/index/<mapVersion>/<Country>.cmti before starting.
+      - ./data:/data

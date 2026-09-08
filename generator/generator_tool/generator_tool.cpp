@@ -28,6 +28,7 @@
 #include "generator/search_index_builder.hpp"
 #include "generator/statistics.hpp"
 #include "generator/traffic_generator.hpp"
+#include "generator/traffic_index_generator.hpp"
 #include "generator/transit_generator.hpp"
 #include "generator/transit_generator_experimental.hpp"
 #include "generator/unpack_mwm.hpp"
@@ -43,12 +44,16 @@
 #include "indexer/map_style_reader.hpp"
 #include "indexer/rank_table.hpp"
 
+#include "platform/local_country_file.hpp"
 #include "platform/platform.hpp"
 
 #include "coding/endianness.hpp"
 
 #include "base/file_name_utils.hpp"
+#include "base/string_utils.hpp"
 #include "base/timer.hpp"
+
+#include <map>
 
 #include "defines.hpp"
 
@@ -175,6 +180,16 @@ DEFINE_bool(unpack_mwm, false, "Unpack each section of mwm into a separate file 
 DEFINE_bool(check_mwm, false, "Check map file to be correct.");
 DEFINE_string(delete_section, "", "Delete specified section (defines.hpp) from container.");
 DEFINE_bool(generate_traffic_keys, false, "Generate keys for the traffic map (road segment -> speed group).");
+DEFINE_string(generate_traffic_index, "",
+              "Write a CMTI traffic index to this path, for tools/traffic_server. Covers a bounded area "
+              "(see --traffic_index_bbox), not a whole country.");
+DEFINE_string(traffic_index_bbox, "",
+              "Area for --generate_traffic_index as minLat,minLon,maxLat,maxLon. Defaults to the whole mwm, "
+              "which only works for small extracts.");
+DEFINE_uint64(traffic_index_max_segments, 250000,
+              "Refuse to build a traffic index larger than this many directional segments.");
+DEFINE_string(traffic_index_road_classes, "motorway,trunk,primary,secondary,tertiary",
+              "Road classes to include in the traffic index.");
 
 DEFINE_bool(dump_mwm_tmp, false, "Prints feature builder objects from .mwm.tmp");
 
@@ -559,6 +574,49 @@ MAIN_WITH_ERROR_HANDLING([](int argc, char ** argv)
     {
       if (!traffic::GenerateTrafficKeysFromDataFile(dataFile))
         LOG(LCRITICAL, ("Error generating traffic keys."));
+    }
+
+    if (!FLAGS_generate_traffic_index.empty())
+    {
+      traffic::TrafficIndexParams params;
+      params.m_maxSegments = static_cast<size_t>(FLAGS_traffic_index_max_segments);
+
+      if (!FLAGS_traffic_index_bbox.empty())
+      {
+        auto const parts = strings::Tokenize<std::string>(FLAGS_traffic_index_bbox, ",");
+        if (parts.size() != 4 || !strings::to_double(parts[0], params.m_minLat) ||
+            !strings::to_double(parts[1], params.m_minLon) || !strings::to_double(parts[2], params.m_maxLat) ||
+            !strings::to_double(parts[3], params.m_maxLon))
+        {
+          LOG(LCRITICAL, ("--traffic_index_bbox must be minLat,minLon,maxLat,maxLon"));
+        }
+      }
+
+      if (!FLAGS_traffic_index_road_classes.empty())
+      {
+        static std::map<std::string, ftypes::HighwayClass> const kByName = {
+            {"motorway", ftypes::HighwayClass::Motorway},         {"trunk", ftypes::HighwayClass::Trunk},
+            {"primary", ftypes::HighwayClass::Primary},           {"secondary", ftypes::HighwayClass::Secondary},
+            {"tertiary", ftypes::HighwayClass::Tertiary},         {"living_street", ftypes::HighwayClass::LivingStreet},
+            {"service", ftypes::HighwayClass::Service}};
+
+        auto const names = strings::Tokenize<std::string>(FLAGS_traffic_index_road_classes, ",");
+        params.m_roadClasses.clear();
+        for (auto const & name : names)
+        {
+          auto const it = kByName.find(name);
+          if (it == kByName.end())
+            LOG(LCRITICAL, ("Unknown road class:", name));
+          params.m_roadClasses.insert(it->second);
+        }
+      }
+
+      auto const localFile = platform::LocalCountryFile::MakeTemporary(dataFile);
+      if (!traffic::GenerateTrafficIndex(dataFile, FLAGS_generate_traffic_index, FLAGS_output,
+                                         static_cast<uint64_t>(localFile.GetVersion()), params))
+      {
+        LOG(LCRITICAL, ("Error generating the traffic index."));
+      }
     }
   }
 

@@ -3,6 +3,7 @@
 #include "platform/country_defines.hpp"
 #include "platform/http_client.hpp"
 #include "platform/local_country_file.hpp"
+#include "platform/settings.hpp"
 
 #include "routing_common/car_model.hpp"
 
@@ -39,9 +40,41 @@ using namespace std;
 
 namespace
 {
+// Attaches the user's traffic service credentials, if any. Must be called on every traffic
+// request: the server is self-hosted and may require auth for keys as well as values.
+// HttpClient::SetRawHeader uses emplace and will not overwrite, so call this at most once
+// per request.
+void ApplyTrafficAuth(platform::HttpClient & request)
+{
+  string apiKey;
+  if (settings::Get(settings::kTrafficApiKey, apiKey) && !apiKey.empty())
+    request.SetRawHeader("x-api-key", apiKey);
+}
+
+// The base URL of the user's self-hosted traffic service, with a guaranteed trailing slash.
+// Falls back to the compile-time default, which is normally empty and disables traffic.
+// Note that StringStorage drops empty values on reload, so "unset" and "empty" are the same
+// state here and both fall through to the default.
+string GetTrafficBaseUrl()
+{
+  string url;
+  if (settings::Get(settings::kTrafficServerUrl, url))
+  {
+    strings::Trim(url);
+    if (!url.empty())
+    {
+      if (url.back() != '/')
+        url += '/';
+      return url;
+    }
+  }
+  return string(TRAFFIC_DATA_BASE_URL);
+}
+
 bool ReadRemoteFile(string const & url, vector<uint8_t> & contents, int & errorCode)
 {
   platform::HttpClient request(url);
+  ApplyTrafficAuth(request);
   if (!request.RunHttpRequest())
   {
     errorCode = request.ErrorCode();
@@ -66,11 +99,12 @@ bool ReadRemoteFile(string const & url, vector<uint8_t> & contents, int & errorC
 
 string MakeRemoteURL(string const & name, uint64_t version)
 {
-  if (string(TRAFFIC_DATA_BASE_URL).empty())
+  string const base = GetTrafficBaseUrl();
+  if (base.empty())
     return {};
 
   stringstream ss;
-  ss << TRAFFIC_DATA_BASE_URL;
+  ss << base;
   if (version != 0)
     ss << version << "/";
   ss << url::UrlEncode(name) << TRAFFIC_FILE_EXTENSION;
@@ -441,6 +475,7 @@ TrafficInfo::ServerDataStatus TrafficInfo::ReceiveTrafficValues(string & etag, v
   platform::HttpClient request(url);
   request.LoadHeaders(true);
   request.SetRawHeader("If-None-Match", etag);
+  ApplyTrafficAuth(request);
 
   if (!request.RunHttpRequest() || request.ErrorCode() != 200)
     return ProcessFailure(request, version);

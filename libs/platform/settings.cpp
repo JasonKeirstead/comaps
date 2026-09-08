@@ -27,6 +27,8 @@ std::string_view kDeveloperMode = "DeveloperMode";
 std::string_view kShowBookmarkLabels = "ShowBookmarkLabels";
 std::string_view kDonateUrl = "DonateUrl";
 std::string_view kNY = "NY";
+std::string_view kTrafficServerUrl = "TrafficServerUrl";
+std::string_view kTrafficApiKey = "TrafficApiKey";
 
 StringStorage::StringStorage() : StringStorageBase(GetPlatform().SettingsPathForFile(SETTINGS_FILE_NAME)) {}
 

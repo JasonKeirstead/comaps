@@ -239,8 +239,17 @@ struct SettingsView: View {
                 NavigationLink(destination: SettingsNavigationView()) {
                     HStack {
                         Image(systemName: "arrow.up.right.diamond")
-                        
+
                         Text("prefs_group_route")
+                            .lineLimit(1)
+                    }
+                }
+
+                NavigationLink(destination: TrafficServerView()) {
+                    HStack {
+                        Image(systemName: "car.2")
+
+                        Text("traffic_server_title")
                             .lineLimit(1)
                     }
                 }

@@ -1652,6 +1652,26 @@ JNIEXPORT void JNICALL Java_app_organicmaps_sdk_Framework_nativeSetCustomMapDown
     LOG(LINFO, ("nativeSetCustomMapDownloadUrl: framework not created yet, skipping ResetMapDownloadMetaConfig"));
 }
 
+JNIEXPORT void JNICALL Java_app_organicmaps_sdk_Framework_nativeSetTrafficServer(JNIEnv * env, jclass, jstring url,
+                                                                                 jstring apiKey)
+{
+  std::string const nativeUrl = jni::ToNativeString(env, url);
+  std::string const nativeKey = jni::ToNativeString(env, apiKey);
+
+  if (g_framework)
+  {
+    frm()->SetTrafficServer(nativeUrl, nativeKey);
+  }
+  else
+  {
+    // Called before the Framework exists (app start); persisting is enough, since the traffic
+    // manager reads the settings on its first request anyway.
+    settings::Set(settings::kTrafficServerUrl, nativeUrl);
+    settings::Set(settings::kTrafficApiKey, nativeKey);
+    LOG(LINFO, ("nativeSetTrafficServer: framework not created yet, stored settings only"));
+  }
+}
+
 JNIEXPORT void JNICALL Java_app_organicmaps_sdk_Framework_nativeSetAutoZoomEnabled(JNIEnv * env, jclass,
                                                                                    jboolean enabled)
 {

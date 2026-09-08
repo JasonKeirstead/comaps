@@ -15,10 +15,14 @@ import androidx.preference.PreferenceManager;
 import androidx.preference.TwoStatePreference;
 import app.organicmaps.R;
 import app.organicmaps.dialog.CustomMapServerDialog;
+import app.organicmaps.dialog.TrafficServerDialog;
 import app.organicmaps.sdk.Framework;
+import app.organicmaps.sdk.util.Config;
 import app.organicmaps.sdk.util.SharedPropertiesUtils;
 import app.organicmaps.sdk.util.log.LogsManager;
+import app.organicmaps.traffic.TrafficPairingActivity;
 import app.organicmaps.util.Utils;
+import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 
 @Keep
 public class AdvancedSettingsFragment extends BaseXmlSettingsFragment
@@ -38,6 +42,7 @@ public class AdvancedSettingsFragment extends BaseXmlSettingsFragment
     initEmulationBadStorage();
     initOpenExternalLinksPrefsCallback();
     initCustomMapDownloadUrlPrefsCallbacks();
+    initTrafficServerPrefsCallbacks();
   }
 
   @Override
@@ -107,5 +112,67 @@ public class AdvancedSettingsFragment extends BaseXmlSettingsFragment
                                                  : url));
       return true;
     });
+  }
+
+  private void initTrafficServerPrefsCallbacks()
+  {
+    Preference trafficPref = getPreference(getString(R.string.pref_traffic_server_url));
+    updateTrafficServerSummary(trafficPref);
+
+    trafficPref.setOnPreferenceClickListener(preference -> {
+      showTrafficServerChooser(preference);
+      return true;
+    });
+  }
+
+  private void updateTrafficServerSummary(@NonNull Preference preference)
+  {
+    String url = Config.getTrafficServerUrl();
+    preference.setSummary(url.isEmpty() ? getString(R.string.traffic_server_summary_none) : url);
+  }
+
+  private void showTrafficServerChooser(@NonNull Preference preference)
+  {
+    boolean configured = !Config.getTrafficServerUrl().isEmpty();
+
+    // Disconnect is only offered once there is something to disconnect from, so the option list
+    // stays two items long in the common case.
+    CharSequence[] options = configured ? new CharSequence[] {getString(R.string.traffic_server_scan),
+                                                              getString(R.string.traffic_server_manual),
+                                                              getString(R.string.traffic_server_disconnect)}
+                                        : new CharSequence[] {getString(R.string.traffic_server_scan),
+                                                              getString(R.string.traffic_server_manual)};
+
+    new MaterialAlertDialogBuilder(requireContext())
+        .setTitle(R.string.traffic_server_title)
+        .setItems(options,
+                  (dialog, which) -> {
+                    switch (which)
+                    {
+                    case 0:
+                      startActivity(new Intent(requireContext(), TrafficPairingActivity.class));
+                      break;
+                    case 1:
+                      TrafficServerDialog.show(requireContext(), url -> updateTrafficServerSummary(preference));
+                      break;
+                    default:
+                      Framework.nativeSetTrafficServer("", "");
+                      updateTrafficServerSummary(preference);
+                      break;
+                    }
+                  })
+        .setNegativeButton(R.string.cancel, null)
+        .show();
+  }
+
+  @Override
+  public void onResume()
+  {
+    super.onResume();
+
+    // The pairing activity writes the settings itself, so refresh the summary on the way back.
+    Preference trafficPref = findPreference(getString(R.string.pref_traffic_server_url));
+    if (trafficPref != null)
+      updateTrafficServerSummary(trafficPref);
   }
 }

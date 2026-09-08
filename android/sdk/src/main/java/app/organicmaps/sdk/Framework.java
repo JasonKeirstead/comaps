@@ -387,6 +387,17 @@ public class Framework
 
   public static native void nativeSetCustomMapDownloadUrl(String url);
 
+  /**
+   * Points the app at a self-hosted traffic service and drops everything cached from the
+   * previous one. Pass empty strings to disconnect.
+   * <p>
+   * This has to go through native rather than {@link app.organicmaps.sdk.util.Config#setString}
+   * alone: TrafficInfo fetches its key list once per instance and never refreshes it, so cached
+   * entries from the old server would fail the key/value size check on the next poll and the
+   * client would silently discard every response.
+   */
+  public static native void nativeSetTrafficServer(String url, String apiKey);
+
   public static void applyCustomMapDownloadUrl(@NonNull Context context, @Nullable String url)
   {
     nativeSetCustomMapDownloadUrl(normalizeServerUrl(url));

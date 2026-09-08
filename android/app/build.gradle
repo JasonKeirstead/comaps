@@ -375,6 +375,14 @@ dependencies {
   implementation libs.google.guava
   implementation libs.appdevnext.androidchart
 
+  // QR scanning, used only to pair with a self-hosted traffic server.
+  // ZXing's core decoder is pure Java and CameraX is AndroidX, so both are fine for F-Droid.
+  implementation libs.androidx.camera.core
+  implementation libs.androidx.camera.camera2
+  implementation libs.androidx.camera.lifecycle
+  implementation libs.androidx.camera.view
+  implementation libs.zxing.core
+
   // Test Dependencies
   androidTestImplementation libs.androidx.test.junit
   testImplementation libs.junit

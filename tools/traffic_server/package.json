@@ -1,0 +1,32 @@
+{
+  "name": "comaps-traffic-server",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Self-hosted traffic data service for CoMaps. Runs on Cloudflare Workers or under Node.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "bin": {
+    "comaps-traffic": "./dist/entry/cli.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --test --experimental-strip-types test/*.test.ts",
+    "test:smoke": "bash test/smoke.sh",
+    "start": "node --experimental-strip-types src/entry/node.ts",
+    "dev:worker": "wrangler dev",
+    "deploy:worker": "wrangler deploy"
+  },
+  "dependencies": {
+    "qrcode": "^1.5.4"
+  },
+  "devDependencies": {
+    "@types/qrcode": "^1.5.5",
+    "@cloudflare/workers-types": "^4.20250109.0",
+    "typescript": "^5.7.0",
+    "wrangler": "^3.99.0"
+  }
+}

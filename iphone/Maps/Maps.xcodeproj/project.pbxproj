@@ -5186,6 +5186,8 @@
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.navigation";
 				INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace = NO;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright © 2025 CoMaps Contributors. All rights reserved.";
+				INFOPLIST_KEY_NSCameraUsageDescription = "The camera is used only to scan the QR code that pairs CoMaps with your own traffic server.";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "CoMaps connects to the traffic server you run on your local network.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Determining your location is necessary for navigation and for saving your recently travelled track.";
 				INFOPLIST_KEY_NSSupportsLiveActivities = YES;
 				INFOPLIST_KEY_UILaunchStoryboardName = LaunchScreen;
@@ -5222,6 +5224,8 @@
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.navigation";
 				INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace = NO;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright © 2025 CoMaps Contributors. All rights reserved.";
+				INFOPLIST_KEY_NSCameraUsageDescription = "The camera is used only to scan the QR code that pairs CoMaps with your own traffic server.";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "CoMaps connects to the traffic server you run on your local network.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Determining your location is necessary for navigation and for saving your recently travelled track.";
 				INFOPLIST_KEY_NSSupportsLiveActivities = YES;
 				INFOPLIST_KEY_UILaunchStoryboardName = LaunchScreen;

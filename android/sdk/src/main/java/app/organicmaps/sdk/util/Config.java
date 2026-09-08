@@ -30,6 +30,9 @@ public final class Config
   private static String mFileProviderAuthority;
 
   private static final String KEY_APP_STORAGE = "StoragePath";
+  // Must match settings::kTrafficServerUrl / kTrafficApiKey in libs/platform/settings.cpp.
+  private static final String KEY_TRAFFIC_SERVER_URL = "TrafficServerUrl";
+  private static final String KEY_TRAFFIC_API_KEY = "TrafficApiKey";
 
   private static final String KEY_DOWNLOADER_AUTO = "AutoDownloadEnabled";
   private static final String KEY_PREF_ZOOM_BUTTONS = "ZoomButtonsEnabled";
@@ -171,6 +174,21 @@ public final class Config
   public static void setStoragePath(String path)
   {
     setString(KEY_APP_STORAGE, path);
+  }
+
+  // Self-hosted traffic service. These two keys are read from C++ by libs/traffic, so they must
+  // live in the native settings store rather than in SharedPreferences; Config.setString writes
+  // straight into settings::, which is the same store settings::Get reads.
+  @NonNull
+  public static String getTrafficServerUrl()
+  {
+    return getString(KEY_TRAFFIC_SERVER_URL);
+  }
+
+  @NonNull
+  public static String getTrafficApiKey()
+  {
+    return getString(KEY_TRAFFIC_API_KEY);
   }
 
   public static boolean isAutodownloadEnabled()

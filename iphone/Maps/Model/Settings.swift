@@ -44,6 +44,26 @@ import Combine
     }
     
     
+    /// The base URL of the user's self-hosted traffic service, or "" when not configured.
+    /// Traffic is off entirely unless this is set.
+    static var trafficServerUrl: String {
+        return SettingsBridge.trafficServerUrl()
+    }
+
+
+    /// The API key for that service, or "" when not configured.
+    static var trafficApiKey: String {
+        return SettingsBridge.trafficApiKey()
+    }
+
+
+    /// Points the app at a traffic service and discards anything cached from the previous one.
+    /// Pass empty strings to disconnect.
+    static func setTrafficServer(url: String, apiKey: String) {
+        SettingsBridge.setTrafficServerUrl(url, apiKey: apiKey)
+    }
+
+
     /// If zoom buttons should be displayed
     @objc static var hasZoomButtons: Bool {
         get {

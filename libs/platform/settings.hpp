@@ -15,6 +15,11 @@ extern std::string_view kShowBookmarkLabels;
 // The following two settings are configured externally at the metaserver.
 extern std::string_view kDonateUrl;
 extern std::string_view kNY;
+// Self-hosted traffic service, configured by the user (see docs/DEPLOY_OWN_TRAFFIC_SERVER.md).
+// An empty base URL falls back to TRAFFIC_DATA_BASE_URL, which is normally empty too and
+// disables traffic entirely.
+extern std::string_view kTrafficServerUrl;
+extern std::string_view kTrafficApiKey;
 
 template <class T>
 bool FromString(std::string const & str, T & outValue);

@@ -1,0 +1,72 @@
+{
+  "_comment": [
+    "Cross-language golden vectors for the traffic wire format. Read by both",
+    "libs/traffic/traffic_tests/traffic_info_test.cpp (UNIT_TEST(TrafficInfo_GoldenVectors))",
+    "and tools/traffic_server/test/wire.test.ts, so the C++ client and the TypeScript server",
+    "cannot drift apart.",
+    "",
+    "keysHex is the complete .traffic.keys body (uncompressed).",
+    "valuesPlainHex is the values payload BEFORE zlib deflation -- zlib output is",
+    "implementation-defined and must not be goldened.",
+    "",
+    "The 'mixed' case is taken from UNIT_TEST(TrafficInfo_Serialization) and covers one-way and",
+    "two-way features, a multi-segment feature, and fid = 2^32-1."
+  ],
+  "vectors": [
+    {
+      "name": "mixed",
+      "features": [
+        { "fid": 0, "numSegs": 1, "oneWay": true },
+        { "fid": 1, "numSegs": 1, "oneWay": false },
+        { "fid": 5, "numSegs": 2, "oneWay": false },
+        { "fid": 4294967295, "numSegs": 1, "oneWay": true }
+      ],
+      "keys": [
+        [0, 0, 0],
+        [1, 0, 0],
+        [1, 0, 1],
+        [5, 0, 0],
+        [5, 0, 1],
+        [5, 1, 0],
+        [5, 1, 1],
+        [4294967295, 0, 0]
+      ],
+      "values": ["G0", "G1", "G3", "G2", "G2", "G2", "G5", "TempBlock"],
+      "keysHex": "0004c500000000f7ffffff9295",
+      "valuesPlainHex": "0008c824d5"
+    },
+    {
+      "name": "empty",
+      "features": [],
+      "keys": [],
+      "values": [],
+      "keysHex": "0000",
+      "valuesPlainHex": "0000"
+    },
+    {
+      "name": "single_oneway_segment",
+      "features": [{ "fid": 0, "numSegs": 1, "oneWay": true }],
+      "keys": [[0, 0, 0]],
+      "values": ["Unknown"],
+      "keysHex": "000115",
+      "valuesPlainHex": "000107"
+    },
+    {
+      "name": "all_groups",
+      "features": [{ "fid": 7, "numSegs": 8, "oneWay": true }],
+      "keys": [
+        [7, 0, 0],
+        [7, 1, 0],
+        [7, 2, 0],
+        [7, 3, 0],
+        [7, 4, 0],
+        [7, 5, 0],
+        [7, 6, 0],
+        [7, 7, 0]
+      ],
+      "values": ["G0", "G1", "G2", "G3", "G4", "G5", "TempBlock", "Unknown"],
+      "keysHex": "0001084c",
+      "valuesPlainHex": "000888c6fa"
+    }
+  ]
+}

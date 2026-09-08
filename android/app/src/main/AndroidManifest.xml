@@ -50,6 +50,16 @@
   <uses-permission android:name="androidx.car.app.NAVIGATION_TEMPLATES"/>
   <uses-permission android:name="androidx.car.app.ACCESS_SURFACE"/>
 
+  <!--
+    Used only to scan the QR code that pairs the app with a self-hosted traffic server
+    (Settings -> Advanced -> Traffic server). The camera is never opened otherwise, and the
+    server URL and key can also be typed in by hand, so a device without a camera loses nothing.
+  //-->
+  <uses-permission android:name="android.permission.CAMERA"/>
+  <uses-feature
+      android:name="android.hardware.camera.any"
+      android:required="false"/>
+
   <permission
       android:name="${applicationId}.permission.READ_NAVIGATION_DATA"
       android:icon="@drawable/ic_logo_monochrome"
@@ -385,6 +395,14 @@
         android:name="${applicationId}.ManageSpaceActivity"
         android:exported="true"
         android:targetActivity=".SplashActivity" />
+
+    <activity
+        android:name="app.organicmaps.traffic.TrafficPairingActivity"
+        android:enableOnBackInvokedCallback="true"
+        android:configChanges="orientation|screenLayout|screenSize"
+        android:screenOrientation="fullUser"
+        android:label="@string/traffic_server_scan_title"
+        android:parentActivityName="app.organicmaps.MwmActivity" />
 
     <activity
         android:name="app.organicmaps.downloader.DownloaderActivity"

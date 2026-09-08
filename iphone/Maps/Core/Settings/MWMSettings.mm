@@ -252,6 +252,26 @@ NSString * const kUDFileLoggingEnabledKey = @"FileLoggingEnabledKey";
   return settings::Get(settings::kDonateUrl, url) ? @(url.c_str()) : nil;
 }
 
++ (NSString *)trafficServerUrl
+{
+  std::string url;
+  return settings::Get(settings::kTrafficServerUrl, url) ? @(url.c_str()) : @"";
+}
+
++ (NSString *)trafficApiKey
+{
+  std::string key;
+  return settings::Get(settings::kTrafficApiKey, key) ? @(key.c_str()) : @"";
+}
+
++ (void)setTrafficServerUrl:(NSString *)url apiKey:(NSString *)apiKey
+{
+  // Goes through the Framework rather than settings::Set directly: TrafficInfo fetches its key
+  // list once per instance and never refreshes it, so anything cached from the previous server
+  // would fail the key/value size check and the client would silently drop every response.
+  GetFramework().SetTrafficServer(url ? [url UTF8String] : "", apiKey ? [apiKey UTF8String] : "");
+}
+
 + (BOOL)iCLoudSynchronizationEnabled
 {
   return [NSUserDefaults.standardUserDefaults boolForKey:kiCLoudSynchronizationEnabledKey];

@@ -1060,4 +1060,37 @@
     <string name="place_reviews">%1$s Reviews</string>
     <string name="rating_stars_description">stars: %.1f</string>
     <string name="reviews_by_mangrove">Reviews from Mangrove.\nAdd reviews in <a href="https://mapcomplete.org">MapComplete</a>.</string>
+
+    <!-- Self-hosted traffic server. Traffic data has no default provider: the user runs their own
+         service and pairs the app with it, usually by scanning a QR code. -->
+    <!-- Settings entry title -->
+    <string name="traffic_server_title">Traffic server</string>
+    <!-- Settings entry subtitle, shown when no server has been set up -->
+    <string name="traffic_server_summary_none">Not configured</string>
+    <!-- Explains what the setting is for, shown in the setup dialog -->
+    <string name="traffic_server_message">Live traffic needs a server you run yourself. Pair with it by scanning the QR code it shows, or enter its address by hand.</string>
+    <!-- Button: open the camera to scan a pairing QR code -->
+    <string name="traffic_server_scan">Scan QR code</string>
+    <!-- Title of the QR scanning screen -->
+    <string name="traffic_server_scan_title">Scan pairing code</string>
+    <!-- Instruction shown over the camera preview -->
+    <string name="traffic_server_scan_hint">Point the camera at the pairing code shown by your traffic server</string>
+    <!-- Button: type the server address and key instead of scanning -->
+    <string name="traffic_server_manual">Enter manually</string>
+    <!-- Button: stop using the current traffic server -->
+    <string name="traffic_server_disconnect">Disconnect</string>
+    <!-- Text field label for the traffic server address -->
+    <string name="traffic_server_url_hint">Server address</string>
+    <!-- Text field label for the traffic server key -->
+    <string name="traffic_server_key_hint">API key (optional)</string>
+    <!-- Error shown when the entered address is not a valid http or https URL -->
+    <string name="traffic_server_url_error">Enter an address starting with http:// or https://</string>
+    <!-- Confirmation after pairing succeeds. %1$s is the server name or address -->
+    <string name="traffic_server_paired">Paired with %1$s</string>
+    <!-- Shown when pairing fails. %1$s is the reason reported by the server -->
+    <string name="traffic_server_pair_failed">Pairing failed: %1$s</string>
+    <!-- Shown when the user denies the camera permission -->
+    <string name="traffic_server_camera_denied">Camera access is needed to scan a pairing code. You can enter the server address by hand instead.</string>
+    <!-- Reminder that the traffic layer also has to be switched on -->
+    <string name="traffic_server_enable_hint">Turn on the Traffic layer to see the data.</string>
 </resources>

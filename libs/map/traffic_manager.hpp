@@ -79,6 +79,11 @@ public:
 
   void Invalidate();
 
+  // Call when the traffic server URL or API key changes. Cached TrafficInfo objects hold keys
+  // fetched from the previous server, and TrafficInfo never refreshes them, so they must be
+  // dropped or the next values response will fail the key/value size check.
+  void OnServerChanged();
+
   void OnDestroySurface();
   void OnRecoverSurface();
   void OnMwmDeregistered(platform::LocalCountryFile const & countryFile);

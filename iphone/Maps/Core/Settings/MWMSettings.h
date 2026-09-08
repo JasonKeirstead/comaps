@@ -50,6 +50,14 @@ NS_SWIFT_NAME(SettingsBridge)
 
 + (NSString *)donateUrl;
 
+/// Self-hosted traffic service. Traffic is off unless a server is configured;
+/// see docs/DEPLOY_OWN_TRAFFIC_SERVER.md.
++ (NSString *)trafficServerUrl;
++ (NSString *)trafficApiKey;
+/// Stores both values and drops everything cached from the previous server. Pass empty strings
+/// to disconnect.
++ (void)setTrafficServerUrl:(NSString *)url apiKey:(NSString *)apiKey;
+
 + (BOOL)iCLoudSynchronizationEnabled;
 + (void)setICLoudSynchronizationEnabled:(BOOL)iCLoudSyncEnabled;
 

@@ -1,0 +1,38 @@
+name = "comaps-traffic"
+main = "src/entry/worker.ts"
+
+# node:zlib needs nodejs_compat, and the compatibility date must be at or after the release
+# that enabled it. deflateSync then behaves identically here and under Node, so the values
+# encoder is a single code path.
+compatibility_date = "2025-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Generation happens here, not in the request path. The fetch handler only streams a stored
+# blob and compares ETags (~2 ms CPU), which stays inside the free plan's 10 ms budget; the
+# encoding is tens of milliseconds and would not.
+#
+# Keep this interval in step with TRAFFIC_REFRESH_SECONDS, and mind the provider quota: one
+# request per area per tick. At 2,500 TomTom requests/day, */5 supports about 8 areas.
+[triggers]
+crons = ["*/5 * * * *"]
+
+[[r2_buckets]]
+binding = "R2_INDEX"
+bucket_name = "comaps-traffic-index"
+
+[[kv_namespaces]]
+binding = "KV_STATE"
+id = "replace-me-with-your-kv-namespace-id"
+
+[vars]
+TRAFFIC_AREAS = "Belarus_Minsk Region@250628"
+TRAFFIC_REFRESH_SECONDS = "300"
+TRAFFIC_DAILY_REQUEST_BUDGET = "2000"
+TRAFFIC_ALLOW_ANONYMOUS = "false"
+TRAFFIC_SERVER_NAME = "My CoMaps traffic"
+# Must end with a slash: the client appends "{version}/{country}.traffic" directly.
+TRAFFIC_PUBLIC_BASE_URL = "https://comaps-traffic.example.workers.dev/"
+
+# Secrets are set with `wrangler secret put`, never in this file:
+#   wrangler secret put TOMTOM_API_KEY
+#   wrangler secret put TRAFFIC_ADMIN_TOKEN
