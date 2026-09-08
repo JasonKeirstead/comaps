@@ -46,6 +46,8 @@ generator_tool \
 - `--traffic_index_road_classes` defaults to
   `motorway,trunk,primary,secondary,tertiary` — the classes the map actually draws from zoom 10.
   Adding `living_street` or `service` multiplies the segment count for roads no provider reports on.
+- `--traffic_index_map_version` defaults to 0, meaning "read the map series stamp out of the
+  `.mwm`". Set it only if you need to override what the file reports.
 
 The output path must be `index/<mapVersion>/<Country>.cmti`, where `<Country>` is the `.mwm` name
 exactly as it appears in `data/countries.txt` and `<mapVersion>` is the map series stamp.

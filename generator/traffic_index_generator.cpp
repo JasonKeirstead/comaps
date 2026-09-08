@@ -9,9 +9,12 @@
 #include "indexer/feature_processor.hpp"
 #include "indexer/ftypes_matcher.hpp"
 
+#include "platform/mwm_version.hpp"
+
 #include "geometry/mercator.hpp"
 
 #include "coding/file_writer.hpp"
+#include "coding/files_container.hpp"
 
 #include "base/logging.hpp"
 #include "base/math.hpp"
@@ -107,6 +110,29 @@ void PadTo4(std::vector<uint8_t> & out)
 bool GenerateTrafficIndex(std::string const & mwmPath, std::string const & outPath, std::string const & countryName,
                           uint64_t mwmVersion, TrafficIndexParams const & params)
 {
+  // The version must match what the client reports for its copy of this map, or the key list
+  // will not line up and every response is discarded without an obvious symptom.
+  if (mwmVersion == 0)
+  {
+    try
+    {
+      FilesContainerR container(mwmPath);
+      mwmVersion = version::MwmVersion::Read(container).GetVersion();
+    }
+    catch (RootException const & e)
+    {
+      LOG(LERROR, ("Could not read the map version from", mwmPath, ":", e.Msg()));
+      return false;
+    }
+
+    if (mwmVersion == 0)
+    {
+      LOG(LERROR, ("No map version in", mwmPath, "- pass --traffic_index_map_version explicitly."));
+      return false;
+    }
+    LOG(LINFO, ("Map version read from the mwm:", mwmVersion));
+  }
+
   auto const & carModel = routing::CarModel::AllLimitsInstance();
   ftypes::IsOneWayChecker const & oneWayChecker = ftypes::IsOneWayChecker::Instance();
 

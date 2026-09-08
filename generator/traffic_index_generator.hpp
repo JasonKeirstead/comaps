@@ -39,6 +39,10 @@ struct TrafficIndexParams
 // representative point per segment, so the service never has to parse an mwm -- which it could
 // not do on Cloudflare Workers in any case.
 //
+// |mwmVersion| is the map series stamp (YYMMDD) the index is built for. Pass 0 to read it out of
+// the mwm itself, which is what you want: it must match the version the client reports, or the
+// key list will not line up and every response is silently discarded.
+//
 // Returns false and logs the reason on failure, including when the area exceeds
 // |params.m_maxSegments|.
 bool GenerateTrafficIndex(std::string const & mwmPath, std::string const & outPath, std::string const & countryName,

@@ -44,7 +44,6 @@
 #include "indexer/map_style_reader.hpp"
 #include "indexer/rank_table.hpp"
 
-#include "platform/local_country_file.hpp"
 #include "platform/platform.hpp"
 
 #include "coding/endianness.hpp"
@@ -188,6 +187,8 @@ DEFINE_string(traffic_index_bbox, "",
               "which only works for small extracts.");
 DEFINE_uint64(traffic_index_max_segments, 250000,
               "Refuse to build a traffic index larger than this many directional segments.");
+DEFINE_uint64(traffic_index_map_version, 0,
+              "Map series stamp (YYMMDD) the traffic index is built for. 0 reads it from the mwm.");
 DEFINE_string(traffic_index_road_classes, "motorway,trunk,primary,secondary,tertiary",
               "Road classes to include in the traffic index.");
 
@@ -611,9 +612,10 @@ MAIN_WITH_ERROR_HANDLING([](int argc, char ** argv)
         }
       }
 
-      auto const localFile = platform::LocalCountryFile::MakeTemporary(dataFile);
+      // 0 means "read the version out of the mwm", which is almost always what you want:
+      // LocalCountryFile::MakeTemporary reports version 0, not the real map series stamp.
       if (!traffic::GenerateTrafficIndex(dataFile, FLAGS_generate_traffic_index, FLAGS_output,
-                                         static_cast<uint64_t>(localFile.GetVersion()), params))
+                                         FLAGS_traffic_index_map_version, params))
       {
         LOG(LCRITICAL, ("Error generating the traffic index."));
       }
