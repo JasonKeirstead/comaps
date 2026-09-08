@@ -13,7 +13,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { loadConfig, validateConfig, type Env } from '../src/core/config.ts';
+import { loadConfig, REFRESH_CHOICES, REFRESH_TICK_SECONDS, validateConfig, type Env } from '../src/core/config.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const wranglerToml = readFileSync(join(here, '..', 'wrangler.toml'), 'utf8');
@@ -37,7 +37,7 @@ function wranglerVars(): Env {
   return env;
 }
 
-/** The cron expression, as a refresh interval in seconds. Only the `*​/N` form is used here. */
+/** The cron cadence in seconds. Only the every-N-minutes form is used here. */
 function cronSeconds(): number {
   const match = /crons\s*=\s*\["\*\/(\d+) \* \* \* \*"\]/.exec(wranglerToml);
   assert.ok(match, 'wrangler.toml cron is not in the expected */N minutes form');
@@ -53,11 +53,18 @@ test('the wrangler.toml [vars] shipped to users pass validation', () => {
   assert.deepEqual(validateConfig(loadConfig(env)), []);
 });
 
-test('the cron interval matches TRAFFIC_REFRESH_SECONDS', () => {
-  // They are independent settings, and a mismatch means the budget arithmetic in validateConfig
-  // is checking an interval the Worker does not actually run at.
-  const env = wranglerVars();
-  assert.equal(Number(env.TRAFFIC_REFRESH_SECONDS), cronSeconds());
+test('the cron fires at the tick cadence, not at the chosen interval', () => {
+  // The cron is a fixed tick and refresh.ts enforces the chosen interval against it. A cron
+  // slower than the shortest selectable interval would make that interval look settable while
+  // silently delivering the cron's rate instead.
+  assert.equal(cronSeconds(), REFRESH_TICK_SECONDS);
+});
+
+test('every refresh choice is a whole multiple of the tick', () => {
+  // Otherwise a refresh falls due between ticks and runs late by up to a full tick, every time.
+  for (const seconds of REFRESH_CHOICES) {
+    assert.equal(seconds % REFRESH_TICK_SECONDS, 0, `${seconds}s is not a multiple of the tick`);
+  }
 });
 
 test('the shipped settings fit inside the free KV write allowance', () => {
@@ -98,7 +105,7 @@ test('a zero write budget means unlimited, as the container needs', () => {
   const config = loadConfig({
     TOMTOM_API_KEY: 'k',
     TRAFFIC_ALLOW_ANONYMOUS: 'true',
-    TRAFFIC_REFRESH_SECONDS: '60',
+    TRAFFIC_REFRESH_SECONDS: '300',
     TRAFFIC_MAX_ACTIVE_AREAS: '50',
     TRAFFIC_DAILY_REQUEST_BUDGET: '100000',
   });

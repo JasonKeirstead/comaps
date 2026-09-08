@@ -5,7 +5,7 @@
  */
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { loadConfig, validateConfig } from '../core/config.ts';
+import { describeRefresh, loadConfig, REFRESH_TICK_SECONDS, validateConfig } from '../core/config.ts';
 import { handleRequest } from '../http/router.ts';
 import { refreshAll } from '../refresh.ts';
 import { FsStorage } from '../storage/fs.ts';
@@ -72,6 +72,10 @@ async function runRefresh(): Promise<void> {
 server.listen(port, host, () => {
   console.log(`CoMaps traffic service listening on http://${host}:${port}/`);
   console.log(`Areas: ${config.areas.map((a) => `${a.country}@${a.mapVersion}`).join(', ')}`);
+  console.log(`Refresh: every ${describeRefresh(config.refreshSeconds)} (changeable via PUT /admin/refresh-interval)`);
   void runRefresh();
-  setInterval(() => void runRefresh(), config.refreshSeconds * 1000);
+  // Ticks at the same fixed cadence as the Worker's cron, and refreshAll decides whether the
+  // chosen interval has elapsed. Timing the interval here instead would make the runtime setting
+  // work on Cloudflare and not under Node, and would need a restart to take effect.
+  setInterval(() => void runRefresh(), REFRESH_TICK_SECONDS * 1000);
 });

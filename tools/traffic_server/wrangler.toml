@@ -11,12 +11,15 @@ compatibility_flags = ["nodejs_compat"]
 # blob and compares ETags (~2 ms CPU), which stays inside the free plan's 10 ms budget; the
 # encoding is tens of milliseconds and would not.
 #
-# Keep this in step with TRAFFIC_REFRESH_SECONDS. The binding constraint on the free plan is
-# KV writes (1,000/day), not the TomTom quota: a tick costs one write per area plus one for the
-# counter, so */10 leaves room for 5 areas where */5 would allow only 2. Incidents persist for
-# tens of minutes, so the extra staleness is not visible on the map.
+# This is a tick, not the refresh interval. A Worker cannot rewrite its own cron, so pinning the
+# interval here would mean a redeploy to change it; instead the cron fires at the shortest
+# selectable interval and refresh.ts decides whether the chosen one has elapsed. A tick with
+# nothing due costs one KV read and stops.
+#
+# Must stay equal to the smallest entry in REFRESH_CHOICES (src/core/config.ts). A test enforces
+# that, since a mismatch would silently round every interval up to the cron cadence.
 [triggers]
-crons = ["*/10 * * * *"]
+crons = ["*/5 * * * *"]
 
 # KV holds everything: the uploaded indexes, the generated bodies, and small mutable state.
 #
@@ -41,14 +44,22 @@ binding = "KV_STATE"
 [vars]
 # The one value you must change: which map, and which map version your phone has.
 TRAFFIC_AREAS = "Belarus_Minsk Region@260906"
-TRAFFIC_REFRESH_SECONDS = "600"
+# How often traffic is refreshed. One of 300, 600, 1800, 3600 (5 min, 10 min, 30 min, 1 hour).
+# 30 minutes by default: it leaves plenty of room in both budgets below, and TomTom incidents
+# persist for tens of minutes, so a shorter interval mostly buys you the same data again.
+#
+# You do not have to redeploy to change this -- see PUT /admin/refresh-interval, which refuses
+# any interval the budgets below cannot pay for.
+TRAFFIC_REFRESH_SECONDS = "1800"
 TRAFFIC_DAILY_REQUEST_BUDGET = "2000"
-# Workers KV on the free plan allows 1,000 writes/day. The service checks its own settings
-# against this at startup rather than letting writes start failing mid-afternoon. Bind R2
-# (above) and raise this if you want more areas or a faster refresh.
+# Workers KV on the free plan allows 1,000 writes/day. The service checks its settings against
+# this at startup, and again whenever the interval is changed, rather than letting writes start
+# failing mid-afternoon. Bind R2 (above) and raise this if you want more.
 TRAFFIC_DAILY_WRITE_BUDGET = "1000"
-# 5 areas x 144 ticks/day + 144 counter writes = 864 writes/day, inside the budget above.
-TRAFFIC_MAX_ACTIVE_AREAS = "5"
+# 8 areas x 48 ticks/day + 48 bookkeeping writes = 432 writes/day at 30 min, well inside budget.
+# Note this is what makes the 5 min option unaffordable on a free plan: 8 areas every 5 minutes
+# is 2,592 writes/day. Lower this to pick a shorter interval, or bind R2.
+TRAFFIC_MAX_ACTIVE_AREAS = "8"
 TRAFFIC_ALLOW_ANONYMOUS = "false"
 TRAFFIC_SERVER_NAME = "My CoMaps traffic"
 # Leave empty and the service uses the URL the request arrived on, which is what you want on

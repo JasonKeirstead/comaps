@@ -50,6 +50,21 @@ export interface Config {
 
 export type Env = Record<string, string | undefined>;
 
+/**
+ * The refresh intervals an operator may choose, in seconds.
+ *
+ * A closed list rather than a free number because the Cloudflare cron fires at a fixed cadence
+ * and the interval is enforced against it in code: every choice must be a whole multiple of the
+ * smallest one, or a refresh would land between ticks and run late by up to one tick.
+ */
+export const REFRESH_CHOICES = [300, 600, 1800, 3600] as const;
+
+/** The cron cadence, and so the resolution at which any longer interval can be honoured. */
+export const REFRESH_TICK_SECONDS = REFRESH_CHOICES[0];
+
+export const describeRefresh = (seconds: number): string =>
+  seconds % 3600 === 0 ? `${seconds / 3600}h` : `${Math.round(seconds / 60)} min`;
+
 const num = (env: Env, key: string, fallback: number): number => {
   const raw = env[key];
   if (raw === undefined || raw === '') return fallback;
@@ -95,10 +110,11 @@ export function loadConfig(env: Env): Config {
     tomtomApiKey: env.TOMTOM_API_KEY ?? '',
     areas: parseAreas(env.TRAFFIC_AREAS),
     autoDiscoverAreas: bool(env, 'TRAFFIC_AUTO_DISCOVER_AREAS', true),
-    // 6, not 8: at the default 300s that is 1,728 provider requests/day, inside the default
-    // 2,000 budget. 8 needed 2,304 and made the service refuse to start on its own defaults.
+    // At the 30 min default this is 288 provider requests and 336 writes/day -- comfortable.
+    // It is deliberately not raised further: the interval is settable at runtime, and a high
+    // ceiling here would make the shorter intervals unpickable on a free account.
     maxActiveAreas: num(env, 'TRAFFIC_MAX_ACTIVE_AREAS', 6),
-    refreshSeconds: num(env, 'TRAFFIC_REFRESH_SECONDS', 300),
+    refreshSeconds: num(env, 'TRAFFIC_REFRESH_SECONDS', 1800),
     dailyRequestBudget: num(env, 'TRAFFIC_DAILY_REQUEST_BUDGET', 2000),
     dailyWriteBudget: num(env, 'TRAFFIC_DAILY_WRITE_BUDGET', 0),
     allowAnonymous: bool(env, 'TRAFFIC_ALLOW_ANONYMOUS', false),
@@ -128,8 +144,10 @@ export function validateConfig(config: Config): string[] {
   if (config.areas.length === 0 && !config.autoDiscoverAreas) {
     errors.push('set TRAFFIC_AREAS, or leave TRAFFIC_AUTO_DISCOVER_AREAS on so clients can add areas themselves');
   }
-  if (config.refreshSeconds < 60) {
-    errors.push('TRAFFIC_REFRESH_SECONDS below 60 wastes provider quota; the client polls once a minute');
+  if (!(REFRESH_CHOICES as readonly number[]).includes(config.refreshSeconds)) {
+    errors.push(
+      `TRAFFIC_REFRESH_SECONDS must be one of ${REFRESH_CHOICES.join(', ')}, got ${config.refreshSeconds}`,
+    );
   }
   if (!config.allowAnonymous && !config.staticApiKey && !config.adminToken) {
     errors.push(
@@ -137,34 +155,48 @@ export function validateConfig(config: Config): string[] {
     );
   }
 
+  errors.push(...budgetErrors(config, config.refreshSeconds));
+  return errors;
+}
+
+/**
+ * Whether an interval fits the configured budgets. Split out of validateConfig because the
+ * interval is also settable at runtime, and picking one the account cannot afford has to be
+ * refused there with the same arithmetic and the same wording.
+ */
+export function budgetErrors(config: Config, refreshSeconds: number): string[] {
+  const errors: string[] = [];
+
   // At one provider request per area per refresh. With discovery on, the worst case is the
   // ceiling rather than the pinned list, so check against that.
   const worstCaseAreas = config.autoDiscoverAreas
     ? Math.max(config.areas.length, config.maxActiveAreas)
     : config.areas.length;
-  const ticksPerDay = 86400 / config.refreshSeconds;
+  const ticksPerDay = 86400 / refreshSeconds;
+
   const perDay = ticksPerDay * worstCaseAreas;
   if (perDay > config.dailyRequestBudget) {
     errors.push(
-      `${worstCaseAreas} area(s) refreshed every ${config.refreshSeconds}s needs ` +
+      `${worstCaseAreas} area(s) refreshed every ${describeRefresh(refreshSeconds)} needs ` +
         `${Math.ceil(perDay)} provider requests/day, over the ${config.dailyRequestBudget} budget. ` +
-        'Raise TRAFFIC_REFRESH_SECONDS, or lower TRAFFIC_MAX_ACTIVE_AREAS.',
+        'Choose a longer refresh interval, or lower TRAFFIC_MAX_ACTIVE_AREAS.',
     );
   }
 
-  // Each refreshed area writes its generated body, and the quota counter is written alongside.
-  // Catching this at startup beats the alternative: KV starts rejecting writes partway through
+  // Each refreshed area writes its generated body, and the tick's bookkeeping is written
+  // alongside. Catching this beats the alternative: KV starts rejecting writes partway through
   // the day and traffic silently stops updating while every endpoint still looks healthy.
   if (config.dailyWriteBudget > 0) {
     const writesPerDay = ticksPerDay * (worstCaseAreas + 1);
     if (writesPerDay > config.dailyWriteBudget) {
       errors.push(
-        `${worstCaseAreas} area(s) refreshed every ${config.refreshSeconds}s needs ` +
+        `${worstCaseAreas} area(s) refreshed every ${describeRefresh(refreshSeconds)} needs ` +
           `${Math.ceil(writesPerDay)} storage writes/day, over the ${config.dailyWriteBudget} budget. ` +
-          'Raise TRAFFIC_REFRESH_SECONDS, lower TRAFFIC_MAX_ACTIVE_AREAS, or bind R2 and raise ' +
+          'Choose a longer refresh interval, lower TRAFFIC_MAX_ACTIVE_AREAS, or bind R2 and raise ' +
           'TRAFFIC_DAILY_WRITE_BUDGET.',
       );
     }
   }
+
   return errors;
 }

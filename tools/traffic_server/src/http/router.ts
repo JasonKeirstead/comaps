@@ -21,6 +21,7 @@ import {
   redeemPairingToken,
   revokeDevice,
 } from '../core/pairing.ts';
+import { affordableChoices, getRefresh, setRefresh } from '../core/settings.ts';
 import type { Storage } from '../storage/types.ts';
 
 export interface RouterContext {
@@ -248,7 +249,7 @@ async function handlePair(request: Request, ctx: RouterContext): Promise<Respons
     serverName: ctx.config.serverName,
     deviceId: result.device.id,
     areas: ctx.config.areas,
-    refreshSeconds: ctx.config.refreshSeconds,
+    refreshSeconds: (await getRefresh(ctx.storage, ctx.config)).seconds,
   });
 }
 
@@ -263,6 +264,24 @@ async function handleAdmin(request: Request, ctx: RouterContext, path: string): 
 
   if (path === '/admin/devices' && request.method === 'GET') {
     return json({ devices: await listDevices(ctx.storage) });
+  }
+
+  if (path === '/admin/refresh-interval' && request.method === 'GET') {
+    const current = await getRefresh(ctx.storage, ctx.config);
+    return json({ ...current, options: affordableChoices(ctx.config) });
+  }
+
+  if (path === '/admin/refresh-interval' && request.method === 'PUT') {
+    let body: { seconds?: number };
+    try {
+      body = (await request.json()) as typeof body;
+    } catch {
+      return json({ error: 'expected a JSON body like {"seconds": 1800}' }, 400);
+    }
+
+    const result = await setRefresh(ctx.storage, ctx.config, Number(body.seconds));
+    if (!result.ok) return json({ error: result.errors.join('; '), errors: result.errors }, result.status);
+    return json({ seconds: result.seconds, source: 'override' });
   }
 
   if (path.startsWith('/admin/devices/') && request.method === 'DELETE') {
@@ -294,14 +313,17 @@ async function handleHealth(ctx: RouterContext): Promise<Response> {
   const budgetRaw = await ctx.storage.getState(`quota/${new Date().toISOString().slice(0, 10)}`);
   const used = budgetRaw ? Number(budgetRaw) : 0;
 
-  // Stale beyond twice the refresh interval is worth flagging: the client treats data older
-  // than six minutes as outdated.
-  const stale = areas.some((a) => a.ageSeconds === null || a.ageSeconds > ctx.config.refreshSeconds * 2);
+  const refresh = await getRefresh(ctx.storage, ctx.config);
+
+  // Stale beyond twice the refresh interval is worth flagging. Measured against the interval in
+  // force, not the configured one, or every deployment with an override would look broken.
+  const stale = areas.some((a) => a.ageSeconds === null || a.ageSeconds > refresh.seconds * 2);
 
   return json(
     {
       status: stale ? 'degraded' : 'ok',
-      refreshSeconds: ctx.config.refreshSeconds,
+      refreshSeconds: refresh.seconds,
+      refreshSource: refresh.source,
       providerRequestsToday: used,
       providerDailyBudget: ctx.config.dailyRequestBudget,
       areas,

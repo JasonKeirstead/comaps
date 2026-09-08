@@ -115,6 +115,41 @@ The server handles this by following what your phones actually ask for:
 Nothing to edit when you download a new region. `TRAFFIC_AREAS` still exists if you want to pin
 areas that must always stay fresh, but it is no longer the complete list.
 
+## How often traffic refreshes
+
+Four choices: **5 minutes, 10 minutes, 30 minutes, or 1 hour**. The default is 30 minutes, which
+leaves plenty of room in both budgets below. TomTom reports *incidents*, which persist for tens of
+minutes, so a shorter interval mostly fetches you the same data again.
+
+You do not need to redeploy to change it.
+
+**Cloudflare:**
+
+```bash
+curl -s -H "Authorization: Bearer $TRAFFIC_ADMIN_TOKEN" \
+  https://your-worker.workers.dev/admin/refresh-interval | jq
+```
+
+```bash
+curl -s -X PUT -H "Authorization: Bearer $TRAFFIC_ADMIN_TOKEN" \
+  -H "content-type: application/json" -d '{"seconds": 600}' \
+  https://your-worker.workers.dev/admin/refresh-interval
+```
+
+**Docker:**
+
+```bash
+docker compose exec traffic node --experimental-strip-types src/entry/cli.ts interval
+docker compose exec traffic node --experimental-strip-types src/entry/cli.ts interval 600
+```
+
+Both list the four options and mark any your budget cannot pay for. Picking one of those is
+refused, with the arithmetic, rather than accepted and discovered later as refreshes that stopped
+part-way through the day. It takes effect on the next tick — there is nothing to restart.
+
+`/healthz` reports the interval in force and whether it came from the environment or from a change
+you made.
+
 ## Budgeting
 
 Two ceilings apply, and on Cloudflare's free plan the storage one binds first.
@@ -125,18 +160,21 @@ Two ceilings apply, and on Cloudflare's free plan the storage one binds first.
 requests/day = 86400 / TRAFFIC_REFRESH_SECONDS × active areas
 ```
 
-At 300 s that is 288 per area per day, so TomTom's 2,500/day free tier supports six or so. The
-service refuses to start if the ceiling and interval together exceed
-`TRAFFIC_DAILY_REQUEST_BUDGET`, and `/healthz` reports how much of today's budget has been used.
+At 30 minutes that is 48 per area per day, so the shipped ceiling of 8 areas costs 384 against
+TomTom's 2,500/day free tier. The service refuses to start if the ceiling and interval together
+exceed `TRAFFIC_DAILY_REQUEST_BUDGET`, and `/healthz` reports how much of today's budget is gone.
 
-**Storage writes** — a refresh tick writes one value per area plus one counter. Cloudflare's free
-plan allows 1,000 KV writes/day, so the deployed defaults are a 600 s refresh and
-`TRAFFIC_MAX_ACTIVE_AREAS=5`: 864 writes/day. `TRAFFIC_DAILY_WRITE_BUDGET` is checked at startup
-too, so a bad combination fails immediately instead of half a day later. Set it to `0` for no
-limit — that is what the Docker deployment does, since disk has no such ceiling.
+**Storage writes** — a refresh writes one value per area plus one for bookkeeping. Cloudflare's
+free plan allows 1,000 KV writes/day; at 30 minutes with 8 areas that is 432.
+`TRAFFIC_DAILY_WRITE_BUDGET` is checked at startup and again whenever you change the interval, so
+a bad combination fails immediately instead of half a day later. Set it to `0` for no limit —
+that is what the Docker deployment does, since disk has no such ceiling.
 
-Do not go below 60 s. The app polls once a minute and treats data older than six minutes as
-outdated, so a faster refresh buys nothing and just burns quota.
+This is also what decides which intervals you can pick. With 8 areas, 5 minutes would need 2,592
+writes/day, so on a free plan it is refused until you lower `TRAFFIC_MAX_ACTIVE_AREAS` or bind R2.
+
+Nothing below 5 minutes is offered. The app polls once a minute and treats data older than six
+minutes as outdated, so a faster refresh buys nothing and just burns quota.
 
 ### If you want more areas, or a faster refresh
 

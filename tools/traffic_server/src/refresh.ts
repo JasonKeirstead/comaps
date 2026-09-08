@@ -10,6 +10,7 @@
 
 import type { Config } from './core/config.ts';
 import { activeAreas } from './core/demand.ts';
+import { refreshSeconds } from './core/settings.ts';
 import { parseTrafficIndex } from './core/index/format.ts';
 import { generateTraffic } from './core/pipeline.ts';
 import { TomTomProvider } from './core/providers/tomtom.ts';
@@ -26,6 +27,16 @@ export interface RefreshResult {
 }
 
 const quotaKey = () => `quota/${new Date().toISOString().slice(0, 10)}`;
+const LAST_REFRESH_KEY = 'refresh/lastAt';
+
+/**
+ * How early a tick may run and still count as due.
+ *
+ * The Worker is driven by a cron firing every REFRESH_TICK_SECONDS, and cron delivery is not
+ * precise to the second. Without slack, a tick arriving a moment early is not due, the next one
+ * is a whole tick later, and a 30 min interval silently becomes 35.
+ */
+const DUE_TOLERANCE_MS = 30_000;
 
 export function createProvider(config: Config, fetchImpl?: typeof fetch): TrafficProvider {
   return new TomTomProvider({ apiKey: config.tomtomApiKey, fetchImpl });
@@ -35,12 +46,27 @@ export function createProvider(config: Config, fetchImpl?: typeof fetch): Traffi
  * Refreshes every configured area. Failures are per-area: one unreachable region must not stop
  * the others, since the client will happily keep serving stale data for the rest.
  */
+export interface RefreshOptions {
+  /** Run regardless of when the last refresh was. For an operator asking for one by hand. */
+  force?: boolean;
+}
+
 export async function refreshAll(
   config: Config,
   storage: Storage,
   provider: TrafficProvider = createProvider(config),
+  options: RefreshOptions = {},
 ): Promise<RefreshResult[]> {
   const results: RefreshResult[] = [];
+
+  // The schedule that drives this is a fixed tick -- a cron on Cloudflare, a timer under Node --
+  // and the chosen interval is enforced here, against the last run. Doing it this way is what
+  // lets the interval be a setting at all: a Worker cannot rewrite its own cron, so if the cron
+  // were the interval then TRAFFIC_REFRESH_SECONDS would be decorative.
+  const interval = await refreshSeconds(storage, config);
+  const now = Date.now();
+  const lastAt = Number((await storage.getState(LAST_REFRESH_KEY)) ?? 0);
+  if (!options.force && now - lastAt < interval * 1000 - DUE_TOLERANCE_MS) return results;
 
   // Areas come from what clients have actually asked for, plus anything pinned in config.
   const areas = await activeAreas(storage, config);
@@ -116,6 +142,10 @@ export async function refreshAll(
   if (used !== startingQuota) {
     await storage.putState(quotaKey(), String(used), 2 * 86400);
   }
+
+  // Stamped even when every area failed. Retrying a broken provider on every tick would spend
+  // the interval's worth of quota in one go, and the client keeps serving what it has anyway.
+  await storage.putState(LAST_REFRESH_KEY, String(now));
 
   return results;
 }

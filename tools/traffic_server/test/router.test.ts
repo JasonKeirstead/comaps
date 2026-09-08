@@ -249,12 +249,21 @@ test('config parsing and budget validation', () => {
   ]);
   assert.throws(() => parseAreas('NoVersion'), /Country@version/);
 
-  // 4 areas at 60s is 5760 provider requests/day, over a 2000 budget.
+  // 8 areas every 5 minutes is 2304 provider requests/day, over a 2000 budget.
   const tight = loadConfig({
     TOMTOM_API_KEY: 'k',
     TRAFFIC_ALLOW_ANONYMOUS: 'true',
-    TRAFFIC_REFRESH_SECONDS: '60',
-    TRAFFIC_AREAS: 'A@1,B@1,C@1,D@1',
+    TRAFFIC_REFRESH_SECONDS: '300',
+    TRAFFIC_AREAS: 'A@1,B@1,C@1,D@1,E@1,F@1,G@1,H@1',
   });
   assert.match(validateConfig(tight).join('\n'), /over the 2000 budget/);
+
+  // An interval outside the choice list is refused: the cron ticks at the shortest choice, so
+  // an arbitrary number would just be rounded up to a tick boundary without saying so.
+  const odd = loadConfig({
+    TOMTOM_API_KEY: 'k',
+    TRAFFIC_ALLOW_ANONYMOUS: 'true',
+    TRAFFIC_REFRESH_SECONDS: '90',
+  });
+  assert.match(validateConfig(odd).join('\n'), /must be one of 300, 600, 1800, 3600/);
 });

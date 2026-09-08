@@ -5,7 +5,8 @@
  *   comaps-traffic pair            mint a pairing code and print it as a QR
  *   comaps-traffic devices         list paired devices
  *   comaps-traffic revoke <id>     revoke one device
- *   comaps-traffic refresh         run a refresh now
+ *   comaps-traffic refresh         run a refresh now, whether or not one is due
+ *   comaps-traffic interval [s]    show or set the refresh interval
  *   comaps-traffic check           validate configuration and indexes
  *
  * Works directly against the storage directory, so `docker exec <container> comaps-traffic pair`
@@ -14,7 +15,8 @@
  */
 
 import QRCode from 'qrcode';
-import { loadConfig, validateConfig } from '../core/config.ts';
+import { describeRefresh, loadConfig, validateConfig } from '../core/config.ts';
+import { affordableChoices, getRefresh, setRefresh } from '../core/settings.ts';
 import { parseTrafficIndex } from '../core/index/format.ts';
 import { createPairingToken, listDevices, pairingUri, revokeDevice } from '../core/pairing.ts';
 import { refreshAll } from '../refresh.ts';
@@ -68,6 +70,27 @@ async function check(): Promise<void> {
   if (errors.length > 0) process.exit(1);
 }
 
+/** Shows the refresh interval, or sets it when given a value. */
+async function interval(raw: string | undefined): Promise<void> {
+  if (raw === undefined) {
+    const current = await getRefresh(storage, config);
+    console.log(`Refresh interval: ${describeRefresh(current.seconds)} (from ${current.source})`);
+    for (const option of affordableChoices(config)) {
+      const mark = option.seconds === current.seconds ? '*' : ' ';
+      const note = option.affordable ? '' : `  -- too often for this budget: ${option.why}`;
+      console.log(` ${mark} ${String(option.seconds).padStart(4)}  ${option.label}${note}`);
+    }
+    return;
+  }
+
+  const result = await setRefresh(storage, config, Number(raw));
+  if (!result.ok) {
+    for (const e of result.errors) console.error(`  ! ${e}`);
+    process.exit(1);
+  }
+  console.log(`Refresh interval set to ${describeRefresh(result.seconds)}. Takes effect on the next tick.`);
+}
+
 async function main(): Promise<void> {
   switch (command) {
     case 'pair':
@@ -88,16 +111,24 @@ async function main(): Promise<void> {
       break;
     }
     case 'refresh': {
-      for (const r of await refreshAll(config, storage)) {
+      // Forced: asking for a refresh by hand and getting silence because one is not due yet
+      // would be indistinguishable from a broken service.
+      const results = await refreshAll(config, storage, undefined, { force: true });
+      if (results.length === 0) console.log('No active areas to refresh.');
+      for (const r of results) {
         console.log(`${r.country}@${r.mapVersion}: ${r.status}${r.detail ? ` (${r.detail})` : ''}`);
       }
+      break;
+    }
+    case 'interval': {
+      await interval(args[0]);
       break;
     }
     case 'check':
       await check();
       break;
     default:
-      console.error('usage: comaps-traffic <pair|devices|revoke|refresh|check>');
+      console.error('usage: comaps-traffic <pair|devices|revoke|refresh|interval|check>');
       process.exit(1);
   }
 }

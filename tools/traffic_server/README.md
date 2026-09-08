@@ -88,10 +88,40 @@ If you change anything under `src/core/wire/`, run both.
 | POST | `/v1/pair` | redeem a pairing token for an API key |
 | POST | `/admin/pairing-token` | mint a single-use token (admin) |
 | GET | `/admin/devices` · DELETE `/admin/devices/{id}` | list and revoke (admin) |
+| GET · PUT | `/admin/refresh-interval` | read or change the refresh interval (admin) |
 | GET | `/healthz` | per-area freshness and remaining provider budget |
 
 Client paths are matched from the end, since the operator chooses the mount point. The version
 segment is absent when the map version is 0.
+
+## Scheduling and the refresh interval
+
+The schedule that drives `refreshAll` is a fixed **tick** -- a `*/5` cron on Cloudflare, a 300 s
+timer under Node -- and the chosen interval is enforced inside `refreshAll` against a stored
+`refresh/lastAt`. A tick with nothing due costs one read and returns.
+
+It has to work this way because a Worker cannot rewrite its own cron. If the cron were the
+interval, changing it would mean a redeploy, and `TRAFFIC_REFRESH_SECONDS` would be decorative --
+which it was until this split: it only fed validation and `/healthz`, while the cron decided the
+real rate.
+
+`REFRESH_CHOICES` in `src/core/config.ts` is the closed list of intervals (300, 600, 1800, 3600),
+and `REFRESH_TICK_SECONDS` is its smallest entry. Two invariants, both covered by tests in
+`test/write-budget.test.ts`:
+
+- the cron in `wrangler.toml` fires at `REFRESH_TICK_SECONDS`, and
+- every choice is a whole multiple of it.
+
+Break either and intervals get silently rounded up to a tick boundary.
+
+`src/core/settings.ts` holds the runtime override in `settings/refreshSeconds`, falling back to
+the environment when unset *or invalid* -- an override written before the choice list changed must
+not wedge the service. `setRefresh` runs the same `budgetErrors` arithmetic as startup validation,
+so a shorter interval than the account can pay for is refused (409) rather than accepted and
+discovered hours later as writes being rejected while `/healthz` still reports healthy.
+
+`refreshAll(config, storage, provider, { force: true })` bypasses the due check, for an operator
+asking for a refresh by hand.
 
 ## Storage backends
 
