@@ -16,6 +16,7 @@
 #include "coding/file_writer.hpp"
 #include "coding/files_container.hpp"
 
+#include "base/exception.hpp"
 #include "base/logging.hpp"
 #include "base/math.hpp"
 
