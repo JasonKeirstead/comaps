@@ -52,8 +52,6 @@
 #include "base/string_utils.hpp"
 #include "base/timer.hpp"
 
-#include <map>
-
 #include "defines.hpp"
 
 #include <gflags/gflags.h>
@@ -199,6 +197,33 @@ DEFINE_uint64(threads_count, 0,
               "Desired count of threads. If count equals zero, count of "
               "threads is set automatically.");
 DEFINE_bool(verbose, false, "Provide more detailed output.");
+
+namespace
+{
+// Kept at file scope on purpose: the body of main is one argument to the
+// MAIN_WITH_ERROR_HANDLING macro, and the preprocessor does not treat braces as protecting
+// commas, so a brace-initialised container down there is split into macro arguments.
+bool ParseHighwayClass(std::string const & name, ftypes::HighwayClass & out)
+{
+  if (name == "motorway")
+    out = ftypes::HighwayClass::Motorway;
+  else if (name == "trunk")
+    out = ftypes::HighwayClass::Trunk;
+  else if (name == "primary")
+    out = ftypes::HighwayClass::Primary;
+  else if (name == "secondary")
+    out = ftypes::HighwayClass::Secondary;
+  else if (name == "tertiary")
+    out = ftypes::HighwayClass::Tertiary;
+  else if (name == "living_street")
+    out = ftypes::HighwayClass::LivingStreet;
+  else if (name == "service")
+    out = ftypes::HighwayClass::Service;
+  else
+    return false;
+  return true;
+}
+}  // namespace
 
 MAIN_WITH_ERROR_HANDLING([](int argc, char ** argv)
 {
@@ -595,20 +620,14 @@ MAIN_WITH_ERROR_HANDLING([](int argc, char ** argv)
 
       if (!FLAGS_traffic_index_road_classes.empty())
       {
-        static std::map<std::string, ftypes::HighwayClass> const kByName = {
-            {"motorway", ftypes::HighwayClass::Motorway},         {"trunk", ftypes::HighwayClass::Trunk},
-            {"primary", ftypes::HighwayClass::Primary},           {"secondary", ftypes::HighwayClass::Secondary},
-            {"tertiary", ftypes::HighwayClass::Tertiary},         {"living_street", ftypes::HighwayClass::LivingStreet},
-            {"service", ftypes::HighwayClass::Service}};
-
         auto const names = strings::Tokenize<std::string>(FLAGS_traffic_index_road_classes, ",");
         params.m_roadClasses.clear();
         for (auto const & name : names)
         {
-          auto const it = kByName.find(name);
-          if (it == kByName.end())
+          ftypes::HighwayClass cls;
+          if (!ParseHighwayClass(name, cls))
             LOG(LCRITICAL, ("Unknown road class:", name));
-          params.m_roadClasses.insert(it->second);
+          params.m_roadClasses.insert(cls);
         }
       }
 
