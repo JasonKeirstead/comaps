@@ -43,8 +43,22 @@ public final class TrafficIndex
     return nativeMapVersion(countryId);
   }
 
+  /**
+   * Which map covers a point, so callers can work out what to index from where the user is
+   * looking rather than enumerating every downloaded region.
+   *
+   * @return the map id, or null if no map covers that point
+   */
+  @Nullable
+  public static String countryAt(double lat, double lon)
+  {
+    return nativeCountryAt(lat, lon);
+  }
+
   private static native byte[] nativeBuild(String countryId, double minLat, double minLon, double maxLat,
                                            double maxLon, int maxSegments);
 
   private static native long nativeMapVersion(String countryId);
+
+  private static native String nativeCountryAt(double lat, double lon);
 }

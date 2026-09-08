@@ -20,6 +20,7 @@ import app.organicmaps.sdk.Framework;
 import app.organicmaps.sdk.util.Config;
 import app.organicmaps.sdk.util.SharedPropertiesUtils;
 import app.organicmaps.sdk.util.log.LogsManager;
+import app.organicmaps.traffic.TrafficIndexSync;
 import app.organicmaps.traffic.TrafficPairingActivity;
 import app.organicmaps.util.Utils;
 import com.google.android.material.dialog.MaterialAlertDialogBuilder;
@@ -139,6 +140,7 @@ public class AdvancedSettingsFragment extends BaseXmlSettingsFragment
     // stays two items long in the common case.
     CharSequence[] options = configured ? new CharSequence[] {getString(R.string.traffic_server_scan),
                                                               getString(R.string.traffic_server_manual),
+                                                              getString(R.string.traffic_server_cover_area),
                                                               getString(R.string.traffic_server_disconnect)}
                                         : new CharSequence[] {getString(R.string.traffic_server_scan),
                                                               getString(R.string.traffic_server_manual)};
@@ -155,6 +157,9 @@ public class AdvancedSettingsFragment extends BaseXmlSettingsFragment
                     case 1:
                       TrafficServerDialog.show(requireContext(), url -> updateTrafficServerSummary(preference));
                       break;
+                    case 2:
+                      coverCurrentArea();
+                      break;
                     default:
                       Framework.nativeSetTrafficServer("", "");
                       updateTrafficServerSummary(preference);
@@ -163,6 +168,56 @@ public class AdvancedSettingsFragment extends BaseXmlSettingsFragment
                   })
         .setNegativeButton(R.string.cancel, null)
         .show();
+  }
+
+  /**
+   * Sends map data for the visible area to the user's traffic server.
+   * <p>
+   * The server needs an index per (map, map version) to answer at all, and that set changes as
+   * maps are downloaded and updated. Rather than making the user run a desktop tool, the app
+   * builds one from the map it already has, for wherever they are looking.
+   */
+  private void coverCurrentArea()
+  {
+    final String baseUrl = Config.getTrafficServerUrl();
+    final String apiKey = Config.getTrafficApiKey();
+    if (baseUrl.isEmpty())
+    {
+      Utils.showSnackbar(requireView(), getString(R.string.traffic_server_not_configured));
+      return;
+    }
+
+    final double[] center = Framework.nativeGetScreenRectCenter();
+    Utils.showSnackbar(requireView(), getString(R.string.traffic_server_covering));
+
+    // Reading the map and uploading are both slow enough to matter; keep them off the UI thread.
+    new Thread(() -> {
+      final TrafficIndexSync.Outcome outcome = TrafficIndexSync.syncAround(baseUrl, apiKey, center[0], center[1]);
+
+      final View view = getView();
+      if (view == null)
+        return;
+
+      view.post(() -> {
+        final View current = getView();
+        if (current != null)
+          Utils.showSnackbar(current, describe(outcome));
+      });
+    }, "traffic-index-sync").start();
+  }
+
+  @NonNull
+  private String describe(@NonNull TrafficIndexSync.Outcome outcome)
+  {
+    final String detail = outcome.detail == null ? "" : outcome.detail;
+    switch (outcome.result)
+    {
+    case UPLOADED: return getString(R.string.traffic_server_covered, outcome.countryId);
+    case ALREADY_PRESENT: return getString(R.string.traffic_server_already_covered, outcome.countryId);
+    case TOO_LARGE: return getString(R.string.traffic_server_area_too_large);
+    case NOT_DOWNLOADED: return getString(R.string.traffic_server_no_map);
+    default: return getString(R.string.traffic_server_cover_failed, detail);
+    }
   }
 
   @Override

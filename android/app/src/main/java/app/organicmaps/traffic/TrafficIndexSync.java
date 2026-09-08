@@ -2,6 +2,8 @@ package app.organicmaps.traffic;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+// Note the package: the index builder lives in the sdk module, this uploader in the app module.
+import app.organicmaps.sdk.traffic.TrafficIndex;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -28,6 +30,16 @@ public final class TrafficIndexSync
 {
   private static final int TIMEOUT_MS = 60000;
 
+  /**
+   * Half-height of the area indexed around the map centre, in degrees of latitude -- roughly
+   * 17 km, so about a 34 km box.
+   * <p>
+   * Coverage is deliberately bounded: the generator refuses areas above its segment cap, and the
+   * client holds the whole key list in memory. Indexing what the user is looking at keeps this
+   * predictable without asking them to draw a rectangle.
+   */
+  private static final double AREA_HALF_SPAN_DEG = 0.15;
+
   /** Outcome of trying to supply one map's index. */
   public enum Result
   {
@@ -47,17 +59,53 @@ public final class TrafficIndexSync
   {
     @NonNull
     public final Result result;
+    /** Failure reason, or null on success. */
     @Nullable
     public final String detail;
+    /** The map this was about, or "" when we never got as far as identifying one. */
+    @NonNull
+    public final String countryId;
 
     Outcome(@NonNull Result result, @Nullable String detail)
     {
+      this(result, detail, "");
+    }
+
+    Outcome(@NonNull Result result, @Nullable String detail, @NonNull String countryId)
+    {
       this.result = result;
       this.detail = detail;
+      this.countryId = countryId;
+    }
+
+    @NonNull
+    Outcome withCountry(@NonNull String country)
+    {
+      return new Outcome(result, detail, country);
     }
   }
 
   private TrafficIndexSync() {}
+
+  /**
+   * Builds and uploads an index covering the area around a point, for whichever map covers it.
+   * Blocking; call off the main thread.
+   */
+  @NonNull
+  public static Outcome syncAround(@NonNull String baseUrl, @NonNull String apiKey, double lat, double lon)
+  {
+    final String countryId = TrafficIndex.countryAt(lat, lon);
+    if (countryId == null || countryId.isEmpty())
+      return new Outcome(Result.NOT_DOWNLOADED, "No map covers this location.");
+
+    // Longitude degrees shrink towards the poles; widen the box so the covered area stays
+    // roughly square rather than a thin sliver at high latitudes.
+    final double lonSpan = AREA_HALF_SPAN_DEG / Math.max(0.2, Math.cos(Math.toRadians(lat)));
+
+    return sync(baseUrl, apiKey, countryId, lat - AREA_HALF_SPAN_DEG, lon - lonSpan, lat + AREA_HALF_SPAN_DEG,
+                lon + lonSpan)
+        .withCountry(countryId);
+  }
 
   /**
    * Builds an index for one downloaded map and uploads it. Blocking; call off the main thread.
@@ -81,7 +129,7 @@ public final class TrafficIndexSync
           + ". Try a smaller area.");
     }
 
-    return upload(baseUrl, apiKey, countryId, mapVersion, index);
+    return upload(baseUrl, apiKey, countryId, mapVersion, index).withCountry(countryId);
   }
 
   @NonNull

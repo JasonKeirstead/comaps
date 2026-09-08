@@ -1093,4 +1093,20 @@
     <string name="traffic_server_camera_denied">Camera access is needed to scan a pairing code. You can enter the server address by hand instead.</string>
     <!-- Reminder that the traffic layer also has to be switched on -->
     <string name="traffic_server_enable_hint">Turn on the Traffic layer to see the data.</string>
+    <!-- Button: send map data for the visible area to the traffic server so it can serve traffic there -->
+    <string name="traffic_server_cover_area">Cover this area</string>
+    <!-- Progress message while map data is prepared and sent -->
+    <string name="traffic_server_covering">Preparing map data for your traffic server\u2026</string>
+    <!-- Shown when the traffic server can now serve this area. %1$s is the map name -->
+    <string name="traffic_server_covered">%1$s is now covered.</string>
+    <!-- Shown when the server already had data for this area. %1$s is the map name -->
+    <string name="traffic_server_already_covered">%1$s was already covered.</string>
+    <!-- Shown when the visible area has too many roads to cover -->
+    <string name="traffic_server_area_too_large">This area is too large. Zoom in and try again.</string>
+    <!-- Shown when no map is downloaded for the visible area -->
+    <string name="traffic_server_no_map">Download the map for this area first.</string>
+    <!-- Shown when covering the area failed. %1$s is the reason -->
+    <string name="traffic_server_cover_failed">Could not cover this area: %1$s</string>
+    <!-- Shown when trying to cover an area before pairing with a server -->
+    <string name="traffic_server_not_configured">Set up a traffic server first.</string>
 </resources>

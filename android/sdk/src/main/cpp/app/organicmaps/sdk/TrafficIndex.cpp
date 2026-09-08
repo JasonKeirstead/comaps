@@ -4,10 +4,13 @@
 
 #include "traffic/traffic_index_generator.hpp"
 
+#include "storage/country_info_getter.hpp"
 #include "storage/storage.hpp"
 
 #include "platform/local_country_file.hpp"
 #include "platform/local_country_file_utils.hpp"
+
+#include "geometry/mercator.hpp"
 
 #include "base/logging.hpp"
 
@@ -66,6 +69,18 @@ JNIEXPORT jbyteArray JNICALL Java_app_organicmaps_sdk_traffic_TrafficIndex_nativ
   env->SetByteArrayRegion(result, 0, static_cast<jsize>(buffer.size()),
                           reinterpret_cast<jbyte const *>(buffer.data()));
   return result;
+}
+
+// Which downloaded map covers a point, so the app can work out what to build an index for
+// without enumerating every region the user has.
+JNIEXPORT jstring JNICALL Java_app_organicmaps_sdk_traffic_TrafficIndex_nativeCountryAt(JNIEnv * env, jclass,
+                                                                                        jdouble lat, jdouble lon)
+{
+  CHECK(g_framework, ("Framework isn't created yet!"));
+
+  auto const point = mercator::FromLatLon(static_cast<double>(lat), static_cast<double>(lon));
+  storage::CountryId const country = g_framework->NativeFramework()->GetCountryInfoGetter().GetRegionCountryId(point);
+  return country.empty() ? nullptr : jni::ToJavaString(env, country);
 }
 
 // The map version the index was built for. The service stores indexes per version, and the
