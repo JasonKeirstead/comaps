@@ -120,6 +120,10 @@ curl -s -X POST https://your-worker.workers.dev/admin/pairing-token \
 
 Render that URI as a QR code and scan it, or use **Enter manually** in the app.
 
+**Desktop (Qt):** there is no QR flow — open **Preferences → Traffic server** and paste the address
+and key straight in, then tick *Show traffic in Driving mode*. This is also the quickest way to
+test a server without involving a phone.
+
 The QR carries a single-use token valid for five minutes, not the API key, so it is safe to show
 on a shared screen. The phone exchanges it for a long-lived key of its own, which means you can
 revoke one device without disturbing the others:

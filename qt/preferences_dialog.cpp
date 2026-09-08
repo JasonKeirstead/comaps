@@ -18,6 +18,7 @@
 #include <QtWidgets/QGroupBox>
 #include <QtWidgets/QHBoxLayout>
 #include <QtWidgets/QLabel>
+#include <QtWidgets/QLineEdit>
 #include <QtWidgets/QPushButton>
 #include <QtWidgets/QRadioButton>
 #include <QtWidgets/QVBoxLayout>
@@ -225,6 +226,67 @@ PreferencesDialog::PreferencesDialog(QWidget * parent, Framework & framework)
     { framework.SwitchToMapAppearance(i == 0 ? MapAppearance::Light : MapAppearance::Dark); });
   }
 
+  // Traffic needs a service the user runs themselves; see docs/DEPLOY_OWN_TRAFFIC_SERVER.md.
+  // On mobile these values arrive by scanning the server's QR code, but there is no camera here
+  // and the operator already has the credentials on this machine -- so plain fields they can
+  // paste into are both simpler and more useful, and they double as the way to debug a server.
+  QGroupBox * trafficBox = new QGroupBox("Traffic server");
+  {
+    QVBoxLayout * layout = new QVBoxLayout();
+
+    QLineEdit * urlEdit = new QLineEdit();
+    urlEdit->setPlaceholderText("http://192.168.1.50:8080/");
+    urlEdit->setText(QString::fromStdString(framework.TrafficServerUrl()));
+    urlEdit->setToolTip(tr("Base URL of your traffic service. Leave empty to disable traffic."));
+
+    QLineEdit * keyEdit = new QLineEdit();
+    keyEdit->setPlaceholderText(tr("API key (optional)"));
+    keyEdit->setText(QString::fromStdString(framework.TrafficApiKey()));
+    // Deliberately not password-masked: on a desktop the point is to paste a key and be able to
+    // see that it pasted correctly.
+    keyEdit->setToolTip(tr("Sent as the x-api-key header. Leave empty if the server allows anonymous access."));
+
+    QLabel * statusLabel = new QLabel();
+    statusLabel->setWordWrap(true);
+
+    auto const apply = [&framework, urlEdit, keyEdit, statusLabel]()
+    {
+      std::string const url = urlEdit->text().trimmed().toStdString();
+      std::string const key = keyEdit->text().trimmed().toStdString();
+
+      if (!url.empty() && url.rfind("http://", 0) != 0 && url.rfind("https://", 0) != 0)
+      {
+        statusLabel->setText(tr("Address must start with http:// or https://"));
+        return;
+      }
+
+      // Normalises the trailing slash and drops anything cached from the previous server.
+      framework.SetTrafficServer(url, key);
+
+      std::string const stored = framework.TrafficServerUrl();
+      urlEdit->setText(QString::fromStdString(stored));
+      statusLabel->setText(stored.empty() ? tr("Traffic disabled.")
+                                          : tr("Using %1").arg(QString::fromStdString(stored)));
+    };
+
+    connect(urlEdit, &QLineEdit::editingFinished, apply);
+    connect(keyEdit, &QLineEdit::editingFinished, apply);
+
+    QCheckBox * trafficEnabledCheckBox = new QCheckBox("Show traffic in Driving mode");
+    trafficEnabledCheckBox->setChecked(framework.DrivingMapModeHasTraffic());
+    connect(trafficEnabledCheckBox, &QCheckBox::stateChanged,
+            [&framework](int state) { framework.DrivingMapModeSetTraffic(state != 0); });
+
+    layout->addWidget(new QLabel(tr("Server address")));
+    layout->addWidget(urlEdit);
+    layout->addWidget(new QLabel(tr("API key")));
+    layout->addWidget(keyEdit);
+    layout->addWidget(trafficEnabledCheckBox);
+    layout->addWidget(statusLabel);
+
+    trafficBox->setLayout(layout);
+  }
+
 #ifdef BUILD_DESIGNER
   QCheckBox * indexRegenCheckBox = new QCheckBox("Enable auto regeneration of geometry index");
   {
@@ -260,6 +322,7 @@ PreferencesDialog::PreferencesDialog(QWidget * parent, Framework & framework)
   finalLayout->addWidget(alternativeMapLanguageHandlingComboBox);
   finalLayout->addWidget(mapAppearanceRadioBox);
   finalLayout->addWidget(showBookmarkLabelsCheckBox);
+  finalLayout->addWidget(trafficBox);
 #ifdef BUILD_DESIGNER
   finalLayout->addWidget(indexRegenCheckBox);
 #endif
