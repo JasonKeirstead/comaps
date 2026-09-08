@@ -119,6 +119,13 @@ void TrafficManager::Clear()
 void TrafficManager::SetDrapeEngine(ref_ptr<df::DrapeEngine> engine)
 {
   m_drapeEngine.Set(engine);
+
+  // Traffic is switched on from the Framework constructor, which runs long before the drape
+  // engine exists -- at that point SetEnabled's EnableTraffic call goes to a null engine and is
+  // lost. Without replaying it here the manager happily fetches and decodes data that the
+  // renderer then ignores, which looks exactly like a broken server.
+  if (engine != nullptr)
+    m_drapeEngine.SafeCall(&df::DrapeEngine::EnableTraffic, IsEnabled());
 }
 
 void TrafficManager::SetCurrentDataVersion(int64_t dataVersion)
