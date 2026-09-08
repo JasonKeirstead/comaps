@@ -46,6 +46,19 @@ extension MapControls {
     }
     
     
+    /// If the traffic layer is being used.
+    /// Traffic only draws in Driving map mode and needs a self-hosted traffic service
+    /// (Settings -> Traffic server); see docs/DEPLOY_OWN_TRAFFIC_SERVER.md.
+    @objc static var hasTrafficLayer: Bool {
+        get {
+            return drivingModeHasTraffic()
+        }
+        set {
+            drivingModeSetTraffic(newValue)
+        }
+    }
+
+
     /// If the contour lines layer is being used
     @objc static var hasContourLinesLayer: Bool {
         get {

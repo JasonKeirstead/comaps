@@ -832,6 +832,8 @@
 "layers_option_outdoor" = "Outdoor";
 /* Usually invisible label for the buildings 3D layer */
 "layers_option_buildings-3d" = "3D Buildings";
+/* Usually invisible label for the traffic layer */
+"layers_option_traffic" = "Traffic";
 /* Alert explaining why the layer is disabled */
 "layers_power-saving" = "This layer is currently automatically disabled due to your power saving mode setting";
 /* Usually invisible label for the position mode button when the location hasn't been determined or isn't being followed */

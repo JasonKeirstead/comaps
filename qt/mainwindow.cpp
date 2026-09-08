@@ -325,6 +325,12 @@ void MainWindow::CreateNavigationBar()
                         std::bind(&MainWindow::OnLayers3dBuildingsChange, this, 0), true);
     m_layers->setChecked(2, m_pDrawWidget->GetFramework().HasBuildings3d());
 
+    // Traffic needs a self-hosted server (Preferences -> Traffic server) and only draws in
+    // Driving mode, matching DrivingMapModeHasTraffic on mobile.
+    m_layers->addAction(QIcon(":/navig64/layers.png"), tr("Traffic"),
+                        std::bind(&MainWindow::OnLayersTrafficChange, this, 0), true);
+    m_layers->setChecked(3, m_pDrawWidget->GetFramework().DrivingMapModeHasTraffic());
+
     pToolBar->addWidget(m_layers->create());
     m_layers->setMainIcon(QIcon(":/navig64/layers.png"));
 
@@ -954,6 +960,12 @@ void MainWindow::OnLayersContourLinesChange(int8_t const index)
 {
   auto & frm = m_pDrawWidget->GetFramework();
   frm.SetContourLinesLayer(m_layers->isChecked(1));
+}
+
+void MainWindow::OnLayersTrafficChange(int8_t const index)
+{
+  auto & frm = m_pDrawWidget->GetFramework();
+  frm.DrivingMapModeSetTraffic(m_layers->isChecked(3));
 }
 
 void MainWindow::OnLayers3dBuildingsChange(int8_t const index)

@@ -136,6 +136,7 @@ protected Q_SLOTS:
   void OnLayersOutdoorChange(int8_t const index);
   void OnLayersContourLinesChange(int8_t const index);
   void OnLayers3dBuildingsChange(int8_t const index);
+  void OnLayersTrafficChange(int8_t const index);
 
   void OnRulerEnabled();
 
