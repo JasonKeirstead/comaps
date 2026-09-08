@@ -78,27 +78,50 @@ not `localhost` — and must end with a slash.
 
 ## 2b. Run it on Cloudflare
 
+### The one-click way
+
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/JasonKeirstead/comaps/tree/main/tools/traffic_server)
+
+That button forks the repo, creates the R2 bucket and KV namespace for you, prompts for the two
+secrets, and deploys. You never touch a terminal or hand out an API token — Cloudflare does the
+authenticating in its own browser flow.
+
+Afterwards, two things in the Cloudflare dashboard:
+
+1. **Settings → Variables** → set `TRAFFIC_AREAS` to your map and version, e.g.
+   `Belarus_Minsk Region@260906`. Everything else has a working default.
+2. **R2 → your bucket** → upload the index from step 1 as
+   `index/<mapVersion>/<Country>.cmti`.
+
+Then jump to step 3 to pair your phone.
+
+### The CLI way
+
 ```bash
 cd tools/traffic_server
 npm install
-wrangler r2 bucket create comaps-traffic-index
-wrangler kv namespace create KV_STATE     # put the id in wrangler.toml
-
-wrangler r2 object put "comaps-traffic-index/index/250628/Belarus_Minsk Region.cmti" \
-  --file "./Belarus_Minsk Region.cmti"
-
 wrangler secret put TOMTOM_API_KEY
 wrangler secret put TRAFFIC_ADMIN_TOKEN
-wrangler deploy
+wrangler deploy          # creates the R2 bucket and KV namespace on first run
 ```
 
-Edit `TRAFFIC_AREAS` and `TRAFFIC_PUBLIC_BASE_URL` in `wrangler.toml` first.
+Edit `TRAFFIC_AREAS` in `wrangler.toml` first, then upload the index:
 
-A note on plans: the Cron Trigger does the provider call and the encoding, and the request handler
-only streams a stored blob, so serving stays inside the free plan's 10 ms CPU budget regardless of
-area size. Generation is tens of milliseconds and will exceed the free plan's cron budget as an
-area approaches the 250k cap — the Workers Paid plan raises that to 30 s. Small areas are fine on
-the free plan.
+```bash
+wrangler r2 object put "comaps-traffic-index/index/260906/Belarus_Minsk Region.cmti" \
+  --file "./Belarus_Minsk Region.cmti"
+```
+
+The bucket and namespace are provisioned automatically because `wrangler.toml` deliberately omits
+their ids; wrangler writes them back after the first deploy. Do not fill them in by hand.
+
+### A note on plans
+
+The Cron Trigger does the provider call and the encoding, and the request handler only streams a
+stored blob, so serving stays inside the free plan's 10 ms CPU budget regardless of area size.
+Generation is tens of milliseconds and will exceed the free plan's cron budget as an area
+approaches the 250k cap — the Workers Paid plan raises that to 30 s. Small areas are fine on the
+free plan.
 
 ## 3. Pair your phone
 

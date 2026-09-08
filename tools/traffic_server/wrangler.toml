@@ -16,23 +16,25 @@ compatibility_flags = ["nodejs_compat"]
 [triggers]
 crons = ["*/5 * * * *"]
 
+# Deliberately no bucket_name / id here. Wrangler and the Deploy to Cloudflare button create
+# these for you on first deploy, named after the Worker, and write the ids back to this file.
+# Filling them in by hand means the deploy fails until you have created them yourself first.
 [[r2_buckets]]
 binding = "R2_INDEX"
-bucket_name = "comaps-traffic-index"
 
 [[kv_namespaces]]
 binding = "KV_STATE"
-id = "replace-me-with-your-kv-namespace-id"
 
 [vars]
-TRAFFIC_AREAS = "Belarus_Minsk Region@250628"
+# The one value you must change: which map, and which map version your phone has.
+TRAFFIC_AREAS = "Belarus_Minsk Region@260906"
 TRAFFIC_REFRESH_SECONDS = "300"
 TRAFFIC_DAILY_REQUEST_BUDGET = "2000"
 TRAFFIC_ALLOW_ANONYMOUS = "false"
 TRAFFIC_SERVER_NAME = "My CoMaps traffic"
-# Must end with a slash: the client appends "{version}/{country}.traffic" directly.
-TRAFFIC_PUBLIC_BASE_URL = "https://comaps-traffic.example.workers.dev/"
+# Leave empty and the service uses the URL the request arrived on, which is what you want on
+# workers.dev. Set it only behind a custom domain or a proxy.
+TRAFFIC_PUBLIC_BASE_URL = ""
 
-# Secrets are set with `wrangler secret put`, never in this file:
-#   wrangler secret put TOMTOM_API_KEY
-#   wrangler secret put TRAFFIC_ADMIN_TOKEN
+# TOMTOM_API_KEY and TRAFFIC_ADMIN_TOKEN are secrets, listed in .dev.vars.example so the
+# Deploy to Cloudflare flow prompts for them. From the CLI: `wrangler secret put <NAME>`.

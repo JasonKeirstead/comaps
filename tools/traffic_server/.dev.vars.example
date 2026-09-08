@@ -1,0 +1,9 @@
+# Secrets for the Worker. The Deploy to Cloudflare flow reads this file and prompts for each
+# value; from the CLI use `wrangler secret put <NAME>`. Never commit real values.
+
+# Free key from https://developer.tomtom.com/ (2,500 non-tile requests/day).
+TOMTOM_API_KEY=
+
+# Any long random string. Needed to issue phone pairing codes:
+#   curl -X POST https://<your-worker>/admin/pairing-token -H "Authorization: Bearer $TRAFFIC_ADMIN_TOKEN"
+TRAFFIC_ADMIN_TOKEN=
