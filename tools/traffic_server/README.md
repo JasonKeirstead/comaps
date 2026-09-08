@@ -97,3 +97,22 @@ segment is absent when the map version is 0.
 Implement `TrafficProvider` in `src/core/providers/` — one `fetch(bbox)` returning
 `{geometry, group}[]` — and select it in `createProvider`. Keep it to a couple of requests per
 call; free tiers are small and the refresh is on a timer.
+
+## Verifying against the C++ client without a full build
+
+`TrafficInfo_GoldenVectors` needs Qt, boost and the indexer. When you only want to confirm the
+wire format, the risky part is narrower: the LSB-first bit writer, Elias-gamma, varint and the
+zlib wrapper, all of which live in `libs/coding` and `libs/base` and compile on their own.
+
+A short program that includes those real headers, reproduces the ~30 structural lines of
+`SerializeTrafficKeys` / `SerializeTrafficValues`, and compares against `keysHex` /
+`valuesPlainHex` from the golden file builds with:
+
+```
+g++ -std=c++20 -DRELEASE -I libs -I . -I 3party -o wire_probe probe.cpp \
+    libs/coding/zlib.cpp libs/base/logging.cpp libs/base/exception.cpp \
+    libs/base/base.cpp libs/base/src_point.cpp libs/base/thread.cpp -lz -lpthread
+```
+
+That covers bit ordering and framing definitively. It does not exercise
+`DeserializeTrafficKeys`, so run the real unit test before trusting a format change.
