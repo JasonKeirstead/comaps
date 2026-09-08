@@ -22,52 +22,63 @@ map it already has.
 
 [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/JasonKeirstead/comaps/tree/main/tools/traffic_server)
 
-The button forks the repo, creates the KV namespace, prompts for two secrets (`TOMTOM_API_KEY` and
-`TRAFFIC_ADMIN_TOKEN` — the latter can be any long random string), and deploys. Cloudflare does the
-authenticating in its own browser flow, so no API token is handed to anything.
+The button forks the repo, creates the KV namespace, and deploys. **The only thing it asks you for
+is your TomTom key.** Everything else has a working default or is worked out at runtime — there is
+no admin token to invent, no coverage list to fill in, and no public URL to guess.
+
+Cloudflare does the authenticating in its own browser flow, so no API token is handed to anything.
 
 **This works on a free Workers account.** The service stores everything in KV, which the free plan
 includes; it does not require R2, whose free tier is behind a separate subscription step. An index
 is a few hundred KB and a generated body a few KB, against KV's 25 MiB per-value limit. See
-[Budgeting](#budgeting) if you later want more areas than the free write quota allows.
+[Budgeting](#budgeting) if you later want more than the free write quota allows.
 
-Note the worker URL when it finishes; you need it in step 2.
+Note the worker URL when it finishes. You want it in a browser for step 2.
 
 ### Or run it yourself
 
 ```bash
 cd tools/traffic_server
-cp .env.example .env      # fill in TOMTOM_API_KEY, TRAFFIC_ADMIN_TOKEN, TRAFFIC_PUBLIC_BASE_URL
+cp .env.example .env      # fill in TOMTOM_API_KEY and TRAFFIC_PUBLIC_BASE_URL
 docker compose up -d
 curl -s localhost:8080/healthz | jq
 ```
 
 `TRAFFIC_PUBLIC_BASE_URL` must be the address **the phone** will use — your machine's LAN address,
-not `localhost` — and must end with a slash.
+not `localhost` — and must end with a slash. Unlike the Cloudflare deployment there is no way to
+work this out from the request, since a phone on your LAN and the container see different
+addresses.
 
 ## 2. Pair your phone
 
-Generate a pairing code.
+Open the worker URL in a browser:
 
-**Cloudflare:**
-
-```bash
-curl -s -X POST https://your-worker.workers.dev/admin/pairing-token \
-  -H "Authorization: Bearer $TRAFFIC_ADMIN_TOKEN" | jq -r .uri
+```
+https://your-worker.workers.dev/
 ```
 
-Render that URI as a QR code.
+It shows a QR code. On the phone: **Settings → Advanced → Traffic server → Scan QR code**, and
+point it at the screen. That is the whole of pairing.
 
-**Docker:**
+If the camera will not cooperate, the same page has a **Show me a key to type in** link, which
+gives you an address and key for **Enter manually** in the same menu.
+
+The page also shows an **admin token**, generated for you. Save it. The setup page stops being
+public the moment a device pairs — after that you get back in with
+`https://your-worker.workers.dev/setup?token=YOUR_ADMIN_TOKEN`, which is also how you pair a
+second phone.
+
+> Lost the admin token? Delete the `settings/adminToken` key from the Worker's KV namespace in the
+> Cloudflare dashboard and reload the page; a new one is generated.
+
+**Docker** has the same page at `http://your-machine:8080/`, or you can print a QR straight into
+the terminal:
 
 ```bash
 docker compose exec traffic node --experimental-strip-types src/entry/cli.ts pair
 ```
 
-which prints a QR code straight into the terminal.
-
-On the phone: **Settings → Advanced → Traffic server → Scan QR code**. Or **Enter manually** and
-type the address and key, which is also the easiest way to test a server.
+### Why it works this way
 
 The QR carries a single-use code valid for five minutes, not the API key, so it is safe to show on
 a shared screen. The phone exchanges it for a key of its own, which means you can revoke one device
@@ -78,7 +89,18 @@ docker compose exec traffic node --experimental-strip-types src/entry/cli.ts dev
 docker compose exec traffic node --experimental-strip-types src/entry/cli.ts revoke <id>
 ```
 
+Or over HTTP, with the admin token:
+
+```bash
+curl -s -H "Authorization: Bearer $ADMIN_TOKEN" https://your-worker.workers.dev/admin/devices
+```
+
 Your TomTom key never leaves the server.
+
+The setup page being open until the first pairing is deliberate — it is the same trade a router
+makes on first boot. The window is from deploy until you scan, usually under a minute, and it
+closes by itself. The alternative was a secret you had to produce before anything worked, which is
+what made the deploy unusable.
 
 ## 3. Cover an area
 
@@ -127,17 +149,18 @@ The interval is therefore a staleness bound, not a timetable. Four choices: **5 
 10 minutes, 30 minutes, or 1 hour**, defaulting to 30. TomTom reports *incidents*, which persist
 for tens of minutes, so a shorter bound mostly fetches the same data again.
 
-You do not need to redeploy to change it.
+You do not need to redeploy to change it. `$ADMIN_TOKEN` below is the admin token the setup
+page showed you in step 2.
 
 **Cloudflare:**
 
 ```bash
-curl -s -H "Authorization: Bearer $TRAFFIC_ADMIN_TOKEN" \
+curl -s -H "Authorization: Bearer $ADMIN_TOKEN" \
   https://your-worker.workers.dev/admin/refresh-interval | jq
 ```
 
 ```bash
-curl -s -X PUT -H "Authorization: Bearer $TRAFFIC_ADMIN_TOKEN" \
+curl -s -X PUT -H "Authorization: Bearer $ADMIN_TOKEN" \
   -H "content-type: application/json" -d '{"seconds": 600}' \
   https://your-worker.workers.dev/admin/refresh-interval
 ```

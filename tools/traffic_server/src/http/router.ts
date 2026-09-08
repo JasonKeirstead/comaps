@@ -8,7 +8,8 @@
  * segment entirely when the MWM version is 0.
  */
 
-import { isAdmin, isAuthorized } from '../core/auth.ts';
+import { getAdminToken, isAdmin } from '../core/admin.ts';
+import { isAuthorized } from '../core/auth.ts';
 import type { Config } from '../core/config.ts';
 import type { TrafficProvider } from '../core/providers/types.ts';
 import { etagMatches } from '../core/etag.ts';
@@ -21,6 +22,7 @@ import {
   redeemPairingToken,
   revokeDevice,
 } from '../core/pairing.ts';
+import { pairingQrSvg, renderLockedPage, renderSetupPage } from './setup.ts';
 import { describeChoices, getRefresh, setRefresh } from '../core/settings.ts';
 import { refreshArea } from '../refresh.ts';
 import type { Storage } from '../storage/types.ts';
@@ -86,6 +88,7 @@ export async function handleRequest(request: Request, ctx: RouterContext): Promi
   const path = url.pathname;
 
   if (path === '/healthz') return await handleHealth(ctx);
+  if (path === '/setup' || path === '/') return await handleSetup(request, ctx);
   if (path === '/v1/pair' && request.method === 'POST') return await handlePair(request, ctx);
   if (path === '/v1/index' && request.method === 'POST') return await handleIndexUpload(request, ctx);
   if (path.startsWith('/admin/')) return await handleAdmin(request, ctx, path);
@@ -256,7 +259,7 @@ async function handlePair(request: Request, ctx: RouterContext): Promise<Respons
 }
 
 async function handleAdmin(request: Request, ctx: RouterContext, path: string): Promise<Response> {
-  if (!isAdmin(ctx.config, request)) return json({ error: 'admin token required' }, 401);
+  if (!(await isAdmin(ctx.storage, ctx.config, request))) return json({ error: 'admin token required' }, 401);
 
   if (path === '/admin/pairing-token' && request.method === 'POST') {
     const { token, expiresIn } = await createPairingToken(ctx.storage);
@@ -294,6 +297,62 @@ async function handleAdmin(request: Request, ctx: RouterContext, path: string): 
   }
 
   return json({ error: 'not found' }, 404);
+}
+
+/**
+ * The page you open after deploying: a QR code to scan, and a way to get a typed key instead.
+ *
+ * Public until the first device pairs, then admin-only. See setup.ts for why that trade is the
+ * right one -- a token the operator must invent before anything works is what this replaces.
+ *
+ * Rendering the page deliberately creates nothing. An earlier version minted a device key on
+ * every view so it could always show one to type in, which meant the first page load locked the
+ * page against its own reload. Getting a typed key is now an explicit `?key=1`, because being
+ * handed a working credential is exactly the moment setup should close.
+ */
+async function handleSetup(request: Request, ctx: RouterContext): Promise<Response> {
+  const html = (body: string, status = 200) =>
+    new Response(body, { status, headers: { 'content-type': 'text/html; charset=utf-8' } });
+
+  const devices = await listDevices(ctx.storage);
+  const admin = await isAdmin(ctx.storage, ctx.config, request);
+  if (devices.length > 0 && !admin) return html(renderLockedPage(ctx.config.serverName), 403);
+
+  const baseUrl = ctx.config.publicBaseUrl || new URL(request.url).origin + '/';
+  // Minting the admin token here, rather than lazily elsewhere, is what lets the page show it
+  // while the operator is still looking at the screen that explains what it is for.
+  const adminToken = await getAdminToken(ctx.storage, ctx.config);
+  const refresh = await getRefresh(ctx.storage, ctx.config);
+
+  let typedKey: string | null = null;
+  if (new URL(request.url).searchParams.get('key') === '1') {
+    // Redeeming a token we just minted is the same path the phone takes, so the key is a real
+    // device key that can be revoked individually.
+    const minted = await createPairingToken(ctx.storage);
+    const result = await redeemPairingToken(ctx.storage, minted.token, 'Typed in during setup');
+    if (!result.ok) return html(renderLockedPage(ctx.config.serverName), 500);
+    typedKey = result.apiKey;
+  }
+
+  const pairing = await createPairingToken(ctx.storage);
+  const qrSvg = await pairingQrSvg(baseUrl, pairing.token);
+
+  return html(
+    renderSetupPage(
+      {
+        serverName: ctx.config.serverName,
+        baseUrl,
+        pairingUri: pairingUri(baseUrl, pairing.token),
+        typedKey,
+        adminToken,
+        refreshSeconds: refresh.seconds,
+        expiresInSeconds: pairing.expiresIn,
+        // Only worth shouting about while it is still news, and only when we generated it.
+        showAdminToken: devices.length === 0 && !ctx.config.adminToken,
+      },
+      qrSvg,
+    ),
+  );
 }
 
 async function handleHealth(ctx: RouterContext): Promise<Response> {

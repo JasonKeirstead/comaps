@@ -19,11 +19,3 @@ export async function isAuthorized(config: Config, storage: Storage, request: Re
   if (config.staticApiKey && timingSafeEqual(key, config.staticApiKey)) return true;
   return await isKnownDevice(storage, key);
 }
-
-export function isAdmin(config: Config, request: Request): boolean {
-  if (!config.adminToken) return false;
-  const header = request.headers.get('authorization') ?? '';
-  const prefix = 'Bearer ';
-  if (!header.startsWith(prefix)) return false;
-  return timingSafeEqual(header.slice(prefix.length), config.adminToken);
-}

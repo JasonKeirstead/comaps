@@ -29,13 +29,13 @@ export interface DeviceRecord {
   pairedAt: number;
 }
 
-function randomBytes(n: number): Uint8Array {
+export function randomBytes(n: number): Uint8Array {
   const out = new Uint8Array(n);
   crypto.getRandomValues(out);
   return out;
 }
 
-function encodeBase32(bytes: Uint8Array): string {
+export function encodeBase32(bytes: Uint8Array): string {
   let out = '';
   for (const b of bytes) out += ALPHABET[b & 0x1f] + ALPHABET[(b >> 5) & 0x1f];
   return out.slice(0, Math.ceil((bytes.length * 8) / 5));

@@ -15,6 +15,7 @@ src/core/index/     .cmti reader and the grid lookup used to match incidents to 
 src/core/providers/ TomTom incidents
 src/core/           pipeline, etag, auth, pairing, config, settings, speed groups
 src/http/router.ts  Request -> Response, runtime-agnostic
+src/http/setup.ts   the pairing page served at / and /setup
 src/storage/        filesystem (container), KV, and KV+R2 (Cloudflare)
 src/entry/          worker.ts (fetch), node.ts (http), cli.ts (operator)
 ```
@@ -89,9 +90,37 @@ If you change anything under `src/core/wire/`, run both.
 | GET | `/admin/devices` · DELETE `/admin/devices/{id}` | list and revoke (admin) |
 | GET · PUT | `/admin/refresh-interval` | read or change the refresh interval (admin) |
 | GET | `/healthz` | per-area freshness and remaining provider budget |
+| GET | `/` · `/setup` | pairing page: QR, optional typed key, generated admin token |
 
 Client paths are matched from the end, since the operator chooses the mount point. The version
 segment is absent when the map version is 0.
+
+## Setup, and why there is no admin token to invent
+
+`TRAFFIC_ADMIN_TOKEN` was a required secret. The Deploy to Cloudflare flow turns
+`.dev.vars.example` into prompts, so the first thing a new operator saw was a field for a secret
+whose purpose the docs had not explained yet. Same for `TRAFFIC_AREAS` (needs map names and
+version stamps) and `TRAFFIC_PUBLIC_BASE_URL` (does not exist until the Worker is deployed).
+
+All three are gone from the deploy path. `core/admin.ts` generates a token on first use and keeps
+it in `settings/adminToken`; `http/setup.ts` serves a page at `/` and `/setup` with a QR code, and
+shows the generated token once. A test in `test/deployed-config.test.ts` asserts that
+`.dev.vars.example` prompts for `TOMTOM_API_KEY` and nothing else, and that those three names have
+not crept back into `[vars]`.
+
+The admin token is stored recoverably, unlike device keys, which are only kept as hashes. It has
+to be, because the page has to display it -- a token nobody can read is a token nobody can use to
+pair a second phone.
+
+**The lock.** The page is public while no device is paired, and admin-only afterwards. That is the
+router-first-boot trade: the window runs from deploy until you scan, usually under a minute, and
+closes by itself. Two things follow, and both are covered by tests:
+
+- Rendering the page must mint nothing. An earlier version created a device key on every view so
+  it could always show one to type in -- which meant the first page load locked the page against
+  its own reload. Getting a typed key is now an explicit `?key=1`.
+- `isAdmin` must not mint the token it checks against, or an unauthenticated caller could create
+  the credential it needs.
 
 ## Refreshes are caused by requests
 

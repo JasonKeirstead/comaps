@@ -35,6 +35,10 @@ export interface Config {
   allowAnonymous: boolean;
   /** A fixed key, as an alternative to QR pairing. */
   staticApiKey: string;
+  /**
+   * Optional. When unset, one is generated on first use and shown on /setup -- see core/admin.ts.
+   * Set it only if you want a token you chose yourself.
+   */
   adminToken: string;
   /** Base URL handed to phones during pairing. */
   publicBaseUrl: string;
@@ -134,12 +138,6 @@ export function validateConfig(config: Config): string[] {
       `TRAFFIC_REFRESH_SECONDS must be one of ${REFRESH_CHOICES.join(', ')}, got ${config.refreshSeconds}`,
     );
   }
-  if (!config.allowAnonymous && !config.staticApiKey && !config.adminToken) {
-    errors.push(
-      'set TRAFFIC_ADMIN_TOKEN (to issue pairing codes), or TRAFFIC_API_KEY, or TRAFFIC_ALLOW_ANONYMOUS=true',
-    );
-  }
-
   if (config.dailyRequestBudget <= 0) {
     errors.push('TRAFFIC_DAILY_REQUEST_BUDGET must be positive; it is the only cap on provider spend');
   }

@@ -28,27 +28,35 @@ binding = "KV_STATE"
 # binding = "R2_INDEX"
 
 [vars]
-# The one value you must change: which map, and which map version your phone has.
-TRAFFIC_AREAS = "Belarus_Minsk Region@260906"
+# Everything here has a working default, and the Deploy to Cloudflare flow shows these as
+# editable fields -- so only settings someone can actually answer belong here. Coverage areas,
+# the public URL and the admin token are all worked out at runtime instead.
+
 # How stale traffic may get before a client request refreshes it. One of 300, 600, 1800, 3600 --
 # 5 min, 10 min, 30 min, 1 hour. This is a bound, not a schedule: nothing runs on a timer, so an
 # area nobody is looking at costs nothing at all.
 #
 # 30 minutes by default. TomTom reports incidents, which persist for tens of minutes, so a
-# shorter bound mostly fetches the same data again. At 30 min one continuously-watched area
-# costs 48 refreshes/day, so the budget below covers about 18 of them.
-#
-# Change it without redeploying: PUT /admin/refresh-interval.
+# shorter bound mostly fetches the same data again. Changeable later without redeploying, on the
+# /setup page or via PUT /admin/refresh-interval.
 TRAFFIC_REFRESH_SECONDS = "1800"
+
 # The only cap on spend. One refresh is one TomTom call and one KV write, so this bounds both;
 # 900 keeps it under the free plan's 1,000 KV writes/day, which binds before TomTom's 2,500.
 # Bind R2 (above) and this can go up to whatever your provider key allows.
 TRAFFIC_DAILY_REQUEST_BUDGET = "900"
-TRAFFIC_ALLOW_ANONYMOUS = "false"
-TRAFFIC_SERVER_NAME = "My CoMaps traffic"
-# Leave empty and the service uses the URL the request arrived on, which is what you want on
-# workers.dev. Set it only behind a custom domain or a proxy.
-TRAFFIC_PUBLIC_BASE_URL = ""
 
-# TOMTOM_API_KEY and TRAFFIC_ADMIN_TOKEN are secrets, listed in .dev.vars.example so the
-# Deploy to Cloudflare flow prompts for them. From the CLI: `wrangler secret put <NAME>`.
+# What the phone shows as the server's name. Cosmetic.
+TRAFFIC_SERVER_NAME = "My CoMaps traffic"
+
+# TOMTOM_API_KEY is the one secret, listed in .dev.vars.example so the Deploy to Cloudflare flow
+# prompts for it. From the CLI: `wrangler secret put TOMTOM_API_KEY`.
+#
+# Deliberately absent:
+#   TRAFFIC_AREAS            areas arrive from the app's "Cover this area"; this would only be a
+#                            /healthz reporting list, and asking for map names and version
+#                            stamps at deploy time is unanswerable.
+#   TRAFFIC_PUBLIC_BASE_URL  empty means "use the URL the request arrived on", which is right on
+#                            workers.dev and cannot be known before the Worker exists. Set it
+#                            only behind a custom domain or a proxy.
+#   TRAFFIC_ADMIN_TOKEN      generated on first use and shown on /setup.

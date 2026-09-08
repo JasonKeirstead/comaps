@@ -37,11 +37,37 @@ function wranglerVars(): Env {
 
 test('the wrangler.toml [vars] shipped to users pass validation', () => {
   const env = wranglerVars();
-  // Supplied as secrets by the deploy flow, not committed.
+  // The one secret the deploy flow prompts for.
   env.TOMTOM_API_KEY = 'supplied-at-deploy';
-  env.TRAFFIC_ADMIN_TOKEN = 'supplied-at-deploy';
 
   assert.deepEqual(validateConfig(loadConfig(env)), []);
+});
+
+test('a TomTom key is the only thing a deploy has to be asked for', () => {
+  // .dev.vars.example is what the Deploy to Cloudflare flow turns into prompts, so anything
+  // listed here is a question put to someone who has not read the docs yet.
+  const prompts = readFileSync(join(here, '..', '.dev.vars.example'), 'utf8')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith('#'))
+    .map((line) => line.split('=')[0]);
+
+  assert.deepEqual(prompts, ['TOMTOM_API_KEY']);
+});
+
+test('the deploy page asks nothing that has to be looked up', () => {
+  // Each of these was a field someone had to fill in and could not answer: coverage areas need
+  // map names and version stamps, the public URL does not exist until the Worker is deployed,
+  // and the admin token was a secret they had to invent before knowing what it was for.
+  const vars = Object.keys(wranglerVars());
+  for (const unanswerable of ['TRAFFIC_AREAS', 'TRAFFIC_PUBLIC_BASE_URL', 'TRAFFIC_ADMIN_TOKEN']) {
+    assert.equal(vars.includes(unanswerable), false, `${unanswerable} is back in [vars]`);
+  }
+});
+
+test('the service starts with nothing configured but a provider key', () => {
+  // What a deploy that accepts every default actually produces.
+  assert.deepEqual(validateConfig(loadConfig({ TOMTOM_API_KEY: 'k' })), []);
 });
 
 test('the shipped refresh interval is one of the offered choices', () => {
@@ -58,16 +84,11 @@ test('there is no cron trigger', () => {
 test("the shipped budget stays inside the free plan's KV write allowance", () => {
   // A refresh is one provider call and one stored write, so the budget bounds both. KV on the
   // free plan allows 1,000 writes/day, which binds before TomTom's 2,500 calls.
-  const config = loadConfig({ ...wranglerVars(), TOMTOM_API_KEY: 'k', TRAFFIC_ADMIN_TOKEN: 't' });
+  const config = loadConfig({ ...wranglerVars(), TOMTOM_API_KEY: 'k' });
   assert.ok(
     config.dailyRequestBudget <= 1000,
     `budget of ${config.dailyRequestBudget} exceeds the free plan's 1,000 KV writes/day`,
   );
-});
-
-test('the built-in defaults validate, with nothing configured but credentials', () => {
-  const config = loadConfig({ TOMTOM_API_KEY: 'k', TRAFFIC_ADMIN_TOKEN: 't' });
-  assert.deepEqual(validateConfig(config), []);
 });
 
 test('a non-positive budget is refused, since it is the only cap on spend', () => {
