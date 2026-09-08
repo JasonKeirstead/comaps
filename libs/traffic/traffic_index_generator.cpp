@@ -1,4 +1,4 @@
-#include "generator/traffic_index_generator.hpp"
+#include "traffic/traffic_index_generator.hpp"
 
 #include "traffic/traffic_info.hpp"
 
@@ -10,6 +10,7 @@
 #include "indexer/ftypes_matcher.hpp"
 
 #include "platform/mwm_version.hpp"
+#include "platform/platform.hpp"
 
 #include "geometry/mercator.hpp"
 
@@ -17,7 +18,9 @@
 #include "coding/files_container.hpp"
 
 #include "base/exception.hpp"
+#include "base/file_name_utils.hpp"
 #include "base/logging.hpp"
+#include "base/macros.hpp"
 #include "base/math.hpp"
 
 #include <algorithm>
@@ -108,8 +111,8 @@ void PadTo4(std::vector<uint8_t> & out)
 }
 }  // namespace
 
-bool GenerateTrafficIndex(std::string const & mwmPath, std::string const & outPath, std::string const & countryName,
-                          uint64_t mwmVersion, TrafficIndexParams const & params)
+std::vector<uint8_t> GenerateTrafficIndexBuffer(std::string const & mwmPath, std::string const & countryName,
+                                                uint64_t mwmVersion, TrafficIndexParams const & params)
 {
   // The version must match what the client reports for its copy of this map, or the key list
   // will not line up and every response is discarded without an obvious symptom.
@@ -123,13 +126,13 @@ bool GenerateTrafficIndex(std::string const & mwmPath, std::string const & outPa
     catch (RootException const & e)
     {
       LOG(LERROR, ("Could not read the map version from", mwmPath, ":", e.Msg()));
-      return false;
+      return {};
     }
 
     if (mwmVersion == 0)
     {
       LOG(LERROR, ("No map version in", mwmPath, "- pass --traffic_index_map_version explicitly."));
-      return false;
+      return {};
     }
     LOG(LINFO, ("Map version read from the mwm:", mwmVersion));
   }
@@ -222,7 +225,7 @@ bool GenerateTrafficIndex(std::string const & mwmPath, std::string const & outPa
   catch (RootException const & e)
   {
     LOG(LERROR, ("Failed to read", mwmPath, ":", e.Msg()));
-    return false;
+    return {};
   }
 
   if (overflow)
@@ -230,13 +233,13 @@ bool GenerateTrafficIndex(std::string const & mwmPath, std::string const & outPa
     LOG(LERROR, ("Area exceeds the", params.m_maxSegments,
                  "segment limit. Coverage is meant to be a city or a corridor, not a whole country."
                  " Narrow --traffic_index_bbox, or drop road classes with --traffic_index_road_classes."));
-    return false;
+    return {};
   }
 
   if (keys.empty())
   {
     LOG(LERROR, ("No matching road segments in", mwmPath, "for the requested area."));
-    return false;
+    return {};
   }
 
   if (oneWayDisagreements > 0)
@@ -261,12 +264,12 @@ bool GenerateTrafficIndex(std::string const & mwmPath, std::string const & outPa
     catch (RootException const & e)
     {
       LOG(LERROR, ("Serialized traffic keys did not parse back:", e.Msg()));
-      return false;
+      return {};
     }
     if (roundTripped != keys)
     {
       LOG(LERROR, ("Serialized traffic keys did not round-trip; refusing to write a broken index."));
-      return false;
+      return {};
     }
   }
 
@@ -330,8 +333,32 @@ bool GenerateTrafficIndex(std::string const & mwmPath, std::string const & outPa
     out.push_back(0);
   }
 
+  LOG(LINFO, ("Built traffic index for", countryName + "@" + std::to_string(mwmVersion), "-", records.size(),
+              "segments,", keysBlob.size(), "bytes of keys,", out.size(), "bytes total."));
+  return out;
+}
+
+bool GenerateTrafficIndex(std::string const & mwmPath, std::string const & outPath, std::string const & countryName,
+                          uint64_t mwmVersion, TrafficIndexParams const & params)
+{
+  auto const out = GenerateTrafficIndexBuffer(mwmPath, countryName, mwmVersion, params);
+  if (out.empty())
+    return false;
+
+  // |mwmVersion| may have been 0, meaning "read it out of the mwm". Recover what was actually
+  // written (header offset 8, little-endian u64) so the advice below names a version that works.
+  uint64_t resolvedVersion = 0;
+  for (size_t i = 0; i < 8; ++i)
+    resolvedVersion |= static_cast<uint64_t>(out[8 + i]) << (8 * i);
+
   try
   {
+    // Create the parent directory rather than aborting on a missing one: the caller has just
+    // been told which path to use and a mkdir is a poor reason to fail after doing the work.
+    std::string dir = base::GetDirectory(outPath);
+    if (!dir.empty() && !Platform::IsFileExistsByFullPath(dir))
+      UNUSED_VALUE(Platform::MkDirRecursively(dir));
+
     FileWriter writer(outPath);
     writer.Write(out.data(), out.size());
   }
@@ -341,8 +368,7 @@ bool GenerateTrafficIndex(std::string const & mwmPath, std::string const & outPa
     return false;
   }
 
-  LOG(LINFO, ("Wrote", outPath, "-", records.size(), "segments,", keysBlob.size(), "bytes of keys,",
-              out.size(), "bytes total. Configure it as", countryName + "@" + std::to_string(mwmVersion)));
+  LOG(LINFO, ("Wrote", outPath, "- configure it as", countryName + "@" + std::to_string(resolvedVersion)));
   return true;
 }
 }  // namespace traffic

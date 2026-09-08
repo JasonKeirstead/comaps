@@ -10,15 +10,29 @@
 
 import { isAdmin, isAuthorized } from '../core/auth.ts';
 import type { Config } from '../core/config.ts';
+import { activeAreas, recordDemand } from '../core/demand.ts';
 import { etagMatches } from '../core/etag.ts';
-import { createPairingToken, listDevices, pairingUri, redeemPairingToken, revokeDevice } from '../core/pairing.ts';
 import { parseTrafficIndex } from '../core/index/format.ts';
+import {
+  createPairingToken,
+  isKnownDevice,
+  listDevices,
+  pairingUri,
+  redeemPairingToken,
+  revokeDevice,
+} from '../core/pairing.ts';
 import type { Storage } from '../storage/types.ts';
 
 export interface RouterContext {
   config: Config;
   storage: Storage;
 }
+
+/**
+ * Upload ceiling. A 250k-segment index is about 4 MB; this leaves headroom without letting a
+ * paired device fill the bucket.
+ */
+const MAX_INDEX_BYTES = 16 * 1024 * 1024;
 
 const json = (body: unknown, status = 200): Response =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
@@ -69,6 +83,7 @@ export async function handleRequest(request: Request, ctx: RouterContext): Promi
 
   if (path === '/healthz') return await handleHealth(ctx);
   if (path === '/v1/pair' && request.method === 'POST') return await handlePair(request, ctx);
+  if (path === '/v1/index' && request.method === 'POST') return await handleIndexUpload(request, ctx);
   if (path.startsWith('/admin/')) return await handleAdmin(request, ctx, path);
 
   const parsed = parseTrafficPath(path);
@@ -82,7 +97,70 @@ export async function handleRequest(request: Request, ctx: RouterContext): Promi
     });
   }
 
+  const version = await resolveVersion(ctx, parsed);
+  if (version !== null) {
+    // Discovery: the client asking is what puts an area on the refresh list.
+    await recordDemand(ctx.storage, parsed.country, version, ctx.config);
+  }
+
   return parsed.wantsKeys ? await handleKeys(ctx, parsed) : await handleValues(request, ctx, parsed);
+}
+
+/**
+ * Accepts a .cmti index built by a paired client from a map on its own device.
+ *
+ * Authenticated with the device's pairing key rather than the admin token: the phone already
+ * holds one, and it means no cloud credential ever lives on the device. Indexes are per
+ * (country, map version) and immutable, so an upload for a pair we already have is a no-op.
+ */
+async function handleIndexUpload(request: Request, ctx: RouterContext): Promise<Response> {
+  const apiKey = request.headers.get('x-api-key') ?? '';
+  const authorised =
+    ctx.config.allowAnonymous ||
+    (ctx.config.staticApiKey !== '' && apiKey === ctx.config.staticApiKey) ||
+    (await isKnownDevice(ctx.storage, apiKey));
+  if (!authorised) return json({ error: 'pair this device first' }, 401);
+
+  const country = request.headers.get('x-traffic-country') ?? '';
+  const mapVersion = Number(request.headers.get('x-traffic-map-version') ?? '0');
+  if (!country || !Number.isInteger(mapVersion) || mapVersion <= 0) {
+    return json({ error: 'x-traffic-country and x-traffic-map-version headers are required' }, 400);
+  }
+
+  const body = new Uint8Array(await request.arrayBuffer());
+  if (body.length < 56) return json({ error: 'index too small to be valid' }, 400);
+  if (body.length > MAX_INDEX_BYTES) {
+    return json({ error: `index exceeds ${MAX_INDEX_BYTES} bytes` }, 413);
+  }
+
+  // Parse before storing: a corrupt index would otherwise fail later, inside the cron, where
+  // nobody is watching.
+  let parsed;
+  try {
+    parsed = parseTrafficIndex(body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength) as ArrayBuffer);
+  } catch (err) {
+    return json({ error: `not a usable index: ${err instanceof Error ? err.message : String(err)}` }, 400);
+  }
+
+  if (parsed.mwmVersion !== mapVersion || parsed.countryName !== country) {
+    return json(
+      {
+        error: `index is for ${parsed.countryName}@${parsed.mwmVersion}, headers say ${country}@${mapVersion}`,
+      },
+      400,
+    );
+  }
+
+  const existing = await ctx.storage.readIndex(country, mapVersion);
+  if (existing) {
+    return json({ status: 'already-present', country, mapVersion, segments: parsed.segmentCount });
+  }
+
+  await ctx.storage.writeIndex(country, mapVersion, body);
+  // Register it immediately so the next cron picks it up without waiting for another poll.
+  await recordDemand(ctx.storage, country, mapVersion, ctx.config);
+
+  return json({ status: 'stored', country, mapVersion, segments: parsed.segmentCount });
 }
 
 /**

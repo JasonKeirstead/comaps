@@ -15,7 +15,15 @@ export interface CoverageArea {
 export interface Config {
   provider: 'tomtom';
   tomtomApiKey: string;
+  /**
+   * Areas kept fresh unconditionally. With auto-discovery on (the default) this is a pinned
+   * set, not the complete set -- clients add areas by asking for them.
+   */
   areas: CoverageArea[];
+  /** Pick up areas from client requests instead of requiring them to be declared. */
+  autoDiscoverAreas: boolean;
+  /** Ceiling on areas refreshed per cycle, so discovery cannot exhaust a free provider tier. */
+  maxActiveAreas: number;
   refreshSeconds: number;
   /** Hard cap on provider requests per UTC day, to stay inside a free tier. */
   dailyRequestBudget: number;
@@ -78,6 +86,8 @@ export function loadConfig(env: Env): Config {
     provider: 'tomtom',
     tomtomApiKey: env.TOMTOM_API_KEY ?? '',
     areas: parseAreas(env.TRAFFIC_AREAS),
+    autoDiscoverAreas: bool(env, 'TRAFFIC_AUTO_DISCOVER_AREAS', true),
+    maxActiveAreas: num(env, 'TRAFFIC_MAX_ACTIVE_AREAS', 8),
     refreshSeconds: num(env, 'TRAFFIC_REFRESH_SECONDS', 300),
     dailyRequestBudget: num(env, 'TRAFFIC_DAILY_REQUEST_BUDGET', 2000),
     allowAnonymous: bool(env, 'TRAFFIC_ALLOW_ANONYMOUS', false),
@@ -104,7 +114,9 @@ export function loadConfig(env: Env): Config {
 export function validateConfig(config: Config): string[] {
   const errors: string[] = [];
   if (!config.tomtomApiKey) errors.push('TOMTOM_API_KEY is required');
-  if (config.areas.length === 0) errors.push('TRAFFIC_AREAS is required, e.g. "Germany_Berlin@250628"');
+  if (config.areas.length === 0 && !config.autoDiscoverAreas) {
+    errors.push('set TRAFFIC_AREAS, or leave TRAFFIC_AUTO_DISCOVER_AREAS on so clients can add areas themselves');
+  }
   if (config.refreshSeconds < 60) {
     errors.push('TRAFFIC_REFRESH_SECONDS below 60 wastes provider quota; the client polls once a minute');
   }
@@ -114,13 +126,17 @@ export function validateConfig(config: Config): string[] {
     );
   }
 
-  // At one provider request per area per refresh.
-  const perDay = (86400 / config.refreshSeconds) * config.areas.length;
+  // At one provider request per area per refresh. With discovery on, the worst case is the
+  // ceiling rather than the pinned list, so check against that.
+  const worstCaseAreas = config.autoDiscoverAreas
+    ? Math.max(config.areas.length, config.maxActiveAreas)
+    : config.areas.length;
+  const perDay = (86400 / config.refreshSeconds) * worstCaseAreas;
   if (perDay > config.dailyRequestBudget) {
     errors.push(
-      `${config.areas.length} area(s) refreshed every ${config.refreshSeconds}s needs ` +
+      `${worstCaseAreas} area(s) refreshed every ${config.refreshSeconds}s needs ` +
         `${Math.ceil(perDay)} provider requests/day, over the ${config.dailyRequestBudget} budget. ` +
-        'Raise TRAFFIC_REFRESH_SECONDS or drop an area.',
+        'Raise TRAFFIC_REFRESH_SECONDS, or lower TRAFFIC_MAX_ACTIVE_AREAS.',
     );
   }
   return errors;

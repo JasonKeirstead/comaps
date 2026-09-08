@@ -209,8 +209,6 @@ set(SRC
   towns_dumper.hpp
   traffic_generator.cpp
   traffic_generator.hpp
-  traffic_index_generator.cpp
-  traffic_index_generator.hpp
   transit_generator.cpp
   transit_generator.hpp
   transit_generator_experimental.cpp

@@ -20,6 +20,9 @@ class MemoryStorage implements Storage {
   async readIndex(country: string, v: number) {
     return this.indexes.get(`${v}/${country}`) ?? null;
   }
+  async writeIndex(country: string, v: number, body: Uint8Array) {
+    this.indexes.set(`${v}/${country}`, body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength) as ArrayBuffer);
+  }
   async indexVersions(country: string) {
     return [...this.indexes.keys()]
       .filter((k) => k.endsWith(`/${country}`))

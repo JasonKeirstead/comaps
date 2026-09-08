@@ -28,12 +28,13 @@
 #include "generator/search_index_builder.hpp"
 #include "generator/statistics.hpp"
 #include "generator/traffic_generator.hpp"
-#include "generator/traffic_index_generator.hpp"
 #include "generator/transit_generator.hpp"
 #include "generator/transit_generator_experimental.hpp"
 #include "generator/unpack_mwm.hpp"
 #include "generator/utils.hpp"
 #include "generator/wiki_url_dumper.hpp"
+
+#include "traffic/traffic_index_generator.hpp"
 
 #include "storage/country_parent_getter.hpp"
 

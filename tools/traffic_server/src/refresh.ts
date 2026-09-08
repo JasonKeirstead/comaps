@@ -9,6 +9,7 @@
  */
 
 import type { Config } from './core/config.ts';
+import { activeAreas } from './core/demand.ts';
 import { parseTrafficIndex } from './core/index/format.ts';
 import { generateTraffic } from './core/pipeline.ts';
 import { TomTomProvider } from './core/providers/tomtom.ts';
@@ -41,12 +42,16 @@ export async function refreshAll(
 ): Promise<RefreshResult[]> {
   const results: RefreshResult[] = [];
 
-  for (const area of config.areas) {
+  // Areas come from what clients have actually asked for, plus anything pinned in config.
+  const areas = await activeAreas(storage, config);
+
+  for (const area of areas) {
     try {
       const used = Number((await storage.getState(quotaKey())) ?? 0);
       if (used >= config.dailyRequestBudget) {
         results.push({
-          ...area,
+          country: area.country,
+          mapVersion: area.mapVersion,
           status: 'skipped',
           detail: `daily provider budget of ${config.dailyRequestBudget} reached`,
         });
@@ -56,7 +61,8 @@ export async function refreshAll(
       const raw = await storage.readIndex(area.country, area.mapVersion);
       if (!raw) {
         results.push({
-          ...area,
+          country: area.country,
+          mapVersion: area.mapVersion,
           status: 'failed',
           detail: `no index for ${area.country}@${area.mapVersion}; build and upload one`,
         });
@@ -68,7 +74,8 @@ export async function refreshAll(
         // Serving values built against a different map release would produce a key-count
         // mismatch, and the client discards the whole payload without saying why.
         results.push({
-          ...area,
+          country: area.country,
+          mapVersion: area.mapVersion,
           status: 'failed',
           detail: `index is for map version ${index.mwmVersion}, configured as ${area.mapVersion}`,
         });
@@ -87,13 +94,14 @@ export async function refreshAll(
       });
 
       results.push({
-        ...area,
+        country: area.country,
+        mapVersion: area.mapVersion,
         status: 'updated',
         coloredSegments: generated.coloredSegments,
         segmentCount: index.segmentCount,
       });
     } catch (err) {
-      results.push({ ...area, status: 'failed', detail: err instanceof Error ? err.message : String(err) });
+      results.push({ country: area.country, mapVersion: area.mapVersion, status: 'failed', detail: err instanceof Error ? err.message : String(err) });
     }
   }
 

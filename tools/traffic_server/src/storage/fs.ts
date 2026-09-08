@@ -44,6 +44,12 @@ export class FsStorage implements Storage {
     }
   }
 
+  async writeIndex(country: string, mapVersion: number, body: Uint8Array): Promise<void> {
+    const dir = this.path('index', String(mapVersion));
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, `${country}.cmti`), body);
+  }
+
   async indexVersions(country: string): Promise<number[]> {
     let versions: string[];
     try {

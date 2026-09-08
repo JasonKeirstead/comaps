@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <set>
 #include <string>
+#include <vector>
 
 namespace traffic
 {
@@ -47,4 +48,12 @@ struct TrafficIndexParams
 // |params.m_maxSegments|.
 bool GenerateTrafficIndex(std::string const & mwmPath, std::string const & outPath, std::string const & countryName,
                           uint64_t mwmVersion, TrafficIndexParams const & params);
+
+// Same, but returns the index in memory rather than writing a file. Used on Android, where the
+// app builds an index from a map it has already downloaded and uploads it to the user's own
+// traffic service -- no desktop toolchain, and nothing to keep in sync by hand.
+//
+// Returns an empty vector on failure.
+std::vector<uint8_t> GenerateTrafficIndexBuffer(std::string const & mwmPath, std::string const & countryName,
+                                                uint64_t mwmVersion, TrafficIndexParams const & params);
 }  // namespace traffic

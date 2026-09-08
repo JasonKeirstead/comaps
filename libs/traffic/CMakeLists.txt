@@ -5,6 +5,8 @@ set(SRC
   speed_groups.hpp
   traffic_cache.cpp
   traffic_cache.hpp
+  traffic_index_generator.cpp
+  traffic_index_generator.hpp
   traffic_info.cpp
   traffic_info.hpp
 )

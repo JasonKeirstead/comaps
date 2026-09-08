@@ -21,6 +21,10 @@ export class R2KvStorage implements Storage {
     return object ? await object.arrayBuffer() : null;
   }
 
+  async writeIndex(country: string, mapVersion: number, body: Uint8Array): Promise<void> {
+    await this.bucket.put(indexKey(country, mapVersion), body as unknown as ArrayBuffer);
+  }
+
   async indexVersions(country: string): Promise<number[]> {
     const listed = await this.bucket.list({ prefix: 'index/' });
     const suffix = `/${country}.cmti`;
