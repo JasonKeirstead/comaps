@@ -387,6 +387,7 @@ dependencies {
   androidTestImplementation libs.androidx.test.junit
   testImplementation libs.junit
   testImplementation libs.mockito.core
+  testImplementation libs.json
 }
 
 android.applicationVariants.all { variant ->
