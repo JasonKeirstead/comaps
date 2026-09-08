@@ -13,10 +13,10 @@ This file is about the code.
 src/core/wire/      byte-exact port of the client's encoders (bit-writer, elias, varint, keys, values)
 src/core/index/     .cmti reader and the grid lookup used to match incidents to segments
 src/core/providers/ TomTom incidents
-src/core/           pipeline, etag, auth, pairing, config, speed groups
+src/core/           pipeline, etag, auth, pairing, config, settings, speed groups
 src/http/router.ts  Request -> Response, runtime-agnostic
 src/storage/        filesystem (container), KV, and KV+R2 (Cloudflare)
-src/entry/          worker.ts (fetch + scheduled), node.ts (http + timer), cli.ts (operator)
+src/entry/          worker.ts (fetch), node.ts (http), cli.ts (operator)
 ```
 
 ## Development
@@ -56,10 +56,9 @@ trailing newline will abort the app.
 **Send an `ETag` on every 200.** The client only updates its stored tag from the response header.
 Omit it and it will resend a stale `If-None-Match` forever.
 
-**Generation stays out of the request path.** The client polls once a minute per visible map, so
-serving live would exhaust a free TomTom tier in minutes; and encoding an area is tens of
-milliseconds against Cloudflare's 10 ms free-plan CPU budget. A cron or timer generates, the
-request handler serves bytes.
+**A request may generate, but at most once per interval.** The client polls once a minute per
+visible map, so generating on every poll would exhaust a free TomTom tier in minutes. The interval
+is what prevents that, not a separate schedule -- see *Refreshes are caused by requests*.
 
 **Elias-gamma here is LSB-first.** The client's `BitWriter` fills bytes from bit 0 up, so the unary
 prefix and the payload both come out reversed relative to the textbook form. Do not substitute an
@@ -94,40 +93,60 @@ If you change anything under `src/core/wire/`, run both.
 Client paths are matched from the end, since the operator chooses the mount point. The version
 segment is absent when the map version is 0.
 
-## Scheduling and the refresh interval
+## Refreshes are caused by requests
 
-The schedule that drives `refreshAll` is a fixed **tick** -- a `*/5` cron on Cloudflare, a 300 s
-timer under Node -- and the chosen interval is enforced inside `refreshAll` against a stored
-`refresh/lastAt`. A tick with nothing due costs one read and returns.
+There is no cron and no timer. `handleValues` calls `refreshArea`, which either returns the
+stored body (still inside the interval) or fetches from the provider, encodes, stores and returns
+the new one. An area nobody requests is never refreshed, so an idle deployment spends nothing.
 
-It has to work this way because a Worker cannot rewrite its own cron. If the cron were the
-interval, changing it would mean a redeploy, and `TRAFFIC_REFRESH_SECONDS` would be decorative --
-which it was until this split: it only fed validation and `/healthz`, while the cron decided the
-real rate.
+This started life as a Cron Trigger, on the theory that encoding was too expensive for the
+request path. Measured on the real 22k-segment Minsk index, that was wrong by an order of
+magnitude:
 
-`REFRESH_CHOICES` in `src/core/config.ts` is the closed list of intervals (300, 600, 1800, 3600),
-and `REFRESH_TICK_SECONDS` is its smallest entry. Two invariants, both covered by tests in
-`test/write-budget.test.ts`:
+```
+parse                  0.1 ms
+generate, 10 events    0.5 ms
+generate, 50 events    1.1 ms
+generate, 200 events   3.4 ms
+```
 
-- the cron in `wrangler.toml` fires at `REFRESH_TICK_SECONDS`, and
-- every choice is a whole multiple of it.
+against a 10 ms free-plan budget. The cron also bought no headroom, because a Cron Trigger on the
+free plan gets *the same* 10 ms CPU limit as an HTTP request — and it was worse than per-request
+work, since it refreshed several areas in one invocation and so came far closer to the limit than
+any single request does.
 
-Break either and intervals get silently rounded up to a tick boundary.
+`refreshArea` returns the previous body rather than nothing whenever it cannot produce a new one:
+provider outage, spent budget, or another request already refreshing this area. Stale traffic is
+much better than none, and the client only stops rendering if it hears nothing from the server at
+all for six minutes.
 
-`src/core/settings.ts` holds the runtime override in `settings/refreshSeconds`, falling back to
-the environment when unset *or invalid* -- an override written before the choice list changed must
-not wedge the service. `setRefresh` runs the same `budgetErrors` arithmetic as startup validation,
-so a shorter interval than the account can pay for is refused (409) rather than accepted and
-discovered hours later as writes being rejected while `/healthz` still reports healthy.
+Two guards worth knowing:
 
-`refreshAll(config, storage, provider, { force: true })` bypasses the due check, for an operator
-asking for a refresh by hand.
+- **Single-flight.** `refreshing/{version}/{country}` is set for the duration of a provider call,
+  with a 60 s TTL. Without it, every phone polling the same city the moment its data goes stale
+  fetches simultaneously.
+- **Daily budget.** `TRAFFIC_DAILY_REQUEST_BUDGET` bounds provider calls *and* stored writes,
+  since a refresh is exactly one of each. It is the only cap on spend, which is why
+  `validateConfig` refuses a non-positive value.
+
+`refreshArea(..., { force: true })` skips the freshness and single-flight checks, for an operator
+asking by hand. `refreshAll` is that, over every area an index exists for; nothing in normal
+operation calls it.
+
+### What the client actually requires
+
+Worth knowing before changing the interval. `kOutdatedDataTimeout` in
+`libs/map/traffic_manager.cpp` is 6 minutes, but it is measured from `m_lastResponseTime` — and a
+**304 counts as a response**, because `ReceiveTrafficData` returns true for `NotChanged` and the
+caller then runs `OnTrafficDataResponse`. So the timeout means "the server has not answered for
+six minutes", not "the data is older than six minutes". The age of the data does not matter to
+the client at all, which is what makes a 30 minute interval, or an hour, perfectly safe.
 
 ## Storage backends
 
 Three implementations of one `Storage` interface (`src/storage/types.ts`), covering blobs
-(indexes, generated bodies) and small mutable state (pairing tokens, device keys, demand records,
-the quota counter).
+(indexes, generated bodies) and small mutable state (pairing tokens, device keys, the chosen
+refresh interval, the in-flight marker, the quota counter).
 
 | | Blobs | State |
 |---|---|---|
@@ -144,30 +163,24 @@ not been through, and the deploy fails outright without it. The objects are smal
 this uninteresting: a whole-region index is ~400 KB, a generated body a few KB, against a 25 MiB
 KV value limit.
 
-What KV does cost is write quota -- 1,000/day on the free plan. `validateConfig` checks the
-configured refresh interval and area ceiling against `TRAFFIC_DAILY_WRITE_BUDGET` at startup, so a
-bad combination fails immediately rather than as writes being rejected mid-afternoon while
-`/healthz` still reports healthy. The container leaves that budget at `0`, meaning unlimited.
+What KV does cost is write quota -- 1,000/day on the free plan. A refresh is one write, so
+`TRAFFIC_DAILY_REQUEST_BUDGET` bounds it; the Cloudflare default of 900 sits under the KV ceiling
+rather than under TomTom's larger one. The container defaults to 2,000, since disk has no such
+limit.
 
-Two consequences of KV being eventually consistent are already handled, and are easy to
-reintroduce: `refreshAll` keeps its provider-quota count in a local across the tick rather than
-re-reading it per area (a re-read would not see the previous iteration's write), and writes it
-once at the end. `listAll` follows the list cursor, because KV pages at 1000 keys.
+`listAll` follows the list cursor, because KV pages at 1000 keys.
 
 ## Where areas come from
 
-`src/core/demand.ts`. Areas are not declared; they are observed. An authorised request for
-`{version}/{Country}.traffic` records a demand entry, `activeAreas` returns the entries seen
-within `DEMAND_TTL_SECONDS` (one hour), plus anything pinned in `TRAFFIC_AREAS`, sorted by
-recency and capped at `TRAFFIC_MAX_ACTIVE_AREAS`.
+Nowhere: they are not a set the service maintains. An area is servable when an index exists for
+its (country, map version), and it is refreshed when someone asks for it. `TRAFFIC_AREAS` only
+feeds `/healthz` and `comaps-traffic refresh`.
 
-This exists because coverage is per (country, map version), and the map version changes under you
-every time the user updates maps. A static list goes stale silently and spends provider quota on
-areas nobody is looking at. `recordDemand` skips the write when the existing record is less than
-half a TTL old, which is what keeps the write cost near one per area per hour rather than one per
-client poll.
+That matters because coverage is per (country, map version), and the map version changes under
+you every time the user updates maps. Any list of areas the service kept would go stale silently
+and spend provider quota on areas nobody is looking at.
 
-`POST /v1/index` is the other half: the phone builds a `.cmti` from the map it already has and
+`POST /v1/index` is how one arrives: the phone builds a `.cmti` from the map it already has and
 uploads it, authenticated with its own pairing key, so no cloud credential ever lands on a device.
 The upload is parsed and cross-checked against the `x-traffic-country` and `x-traffic-map-version`
 headers before it is stored -- a mismatch here becomes a key-count mismatch on the client, which
@@ -177,7 +190,8 @@ discards the payload without reporting anything.
 
 Implement `TrafficProvider` in `src/core/providers/` — one `fetch(bbox)` returning
 `{geometry, group}[]` — and select it in `createProvider`. Keep it to a couple of requests per
-call; free tiers are small and the refresh is on a timer.
+call: free tiers are small, and this runs inside a client request, so it is also latency the
+phone waits on.
 
 ## Verifying against the C++ client without a full build
 

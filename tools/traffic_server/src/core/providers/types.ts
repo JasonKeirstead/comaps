@@ -18,8 +18,8 @@ export interface TrafficProvider {
   readonly name: string;
   /**
    * Fetches current conditions for a bounding box.
-   * Implementations should make at most a couple of requests: free tiers are small and the
-   * refresh job runs on a timer.
+   * Implementations should make at most a couple of requests: free tiers are small, and this
+   * runs inside a client request, so it is also latency a phone is waiting on.
    */
   fetch(bbox: BBox, signal?: AbortSignal): Promise<TrafficEvent[]>;
 }

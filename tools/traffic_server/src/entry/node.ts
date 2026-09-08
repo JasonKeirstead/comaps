@@ -1,13 +1,14 @@
 /**
- * Self-hosted entry point: a plain node:http server plus a refresh timer.
+ * Self-hosted entry point: a plain node:http server.
  *
- * Same router and same refresh job as the Worker; only storage and scheduling differ.
+ * Same router and same refresh path as the Worker; only storage differs. There is no background
+ * timer -- an area is refreshed by a client asking for it, so an idle service makes no provider
+ * calls. `comaps-traffic refresh` is there for when you want one by hand.
  */
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { describeRefresh, loadConfig, REFRESH_TICK_SECONDS, validateConfig } from '../core/config.ts';
+import { describeRefresh, loadConfig, validateConfig } from '../core/config.ts';
 import { handleRequest } from '../http/router.ts';
-import { refreshAll } from '../refresh.ts';
 import { FsStorage } from '../storage/fs.ts';
 
 const config = loadConfig(process.env);
@@ -59,23 +60,12 @@ const server = createServer((req, res) => {
   })();
 });
 
-async function runRefresh(): Promise<void> {
-  const results = await refreshAll(config, storage);
-  for (const r of results) {
-    const suffix = r.coloredSegments !== undefined ? ` ${r.coloredSegments}/${r.segmentCount} coloured` : '';
-    const line = `[refresh] ${r.country}@${r.mapVersion}: ${r.status}${r.detail ? ` (${r.detail})` : ''}${suffix}`;
-    if (r.status === 'failed') console.error(line);
-    else console.log(line);
-  }
-}
 
 server.listen(port, host, () => {
   console.log(`CoMaps traffic service listening on http://${host}:${port}/`);
   console.log(`Areas: ${config.areas.map((a) => `${a.country}@${a.mapVersion}`).join(', ')}`);
-  console.log(`Refresh: every ${describeRefresh(config.refreshSeconds)} (changeable via PUT /admin/refresh-interval)`);
-  void runRefresh();
-  // Ticks at the same fixed cadence as the Worker's cron, and refreshAll decides whether the
-  // chosen interval has elapsed. Timing the interval here instead would make the runtime setting
-  // work on Cloudflare and not under Node, and would need a restart to take effect.
-  setInterval(() => void runRefresh(), REFRESH_TICK_SECONDS * 1000);
+  console.log(
+    `Refresh: on request, at most every ${describeRefresh(config.refreshSeconds)} per area ` +
+      '(changeable via PUT /admin/refresh-interval)',
+  );
 });

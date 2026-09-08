@@ -105,21 +105,27 @@ literally called `DrivingModeHasTraffic` — so select driving mode too.
 Road data is tied to a specific map *and* a specific map release: road ids are positional within a
 map build, so data prepared for one release does not fit another.
 
-The server handles this by following what your phones actually ask for:
+The server handles this by never deciding anything in advance. It serves the release your phone
+asks for, and refreshes it when your phone asks:
 
-- Cover an area once and the server keeps it refreshed while anyone is using it.
-- Stop using an area and it drops off the refresh list after an hour, freeing provider quota.
+- Cover an area once and it stays usable, refreshed whenever someone is actually looking at it.
+- Stop using an area and it costs nothing at all — there is no list it stays on.
 - Update your maps and the app starts asking for the new release — cover the area again, which
   takes a few seconds.
 
-Nothing to edit when you download a new region. `TRAFFIC_AREAS` still exists if you want to pin
-areas that must always stay fresh, but it is no longer the complete list.
+Nothing to edit when you download a new region. `TRAFFIC_AREAS` is only used for `/healthz`
+reporting; it does not decide what is served or refreshed.
 
 ## How often traffic refreshes
 
-Four choices: **5 minutes, 10 minutes, 30 minutes, or 1 hour**. The default is 30 minutes, which
-leaves plenty of room in both budgets below. TomTom reports *incidents*, which persist for tens of
-minutes, so a shorter interval mostly fetches you the same data again.
+Nothing runs on a schedule. Your phone asks for traffic once a minute; if what the server holds
+is older than the interval below, **that request** is what fetches new data from TomTom. An area
+nobody is looking at costs nothing - no provider calls, no quota, no writes. Close the app and the
+server goes idle.
+
+The interval is therefore a staleness bound, not a timetable. Four choices: **5 minutes,
+10 minutes, 30 minutes, or 1 hour**, defaulting to 30. TomTom reports *incidents*, which persist
+for tens of minutes, so a shorter bound mostly fetches the same data again.
 
 You do not need to redeploy to change it.
 
@@ -143,45 +149,35 @@ docker compose exec traffic node --experimental-strip-types src/entry/cli.ts int
 docker compose exec traffic node --experimental-strip-types src/entry/cli.ts interval 600
 ```
 
-Both list the four options and mark any your budget cannot pay for. Picking one of those is
-refused, with the arithmetic, rather than accepted and discovered later as refreshes that stopped
-part-way through the day. It takes effect on the next tick — there is nothing to restart.
-
-`/healthz` reports the interval in force and whether it came from the environment or from a change
-you made.
+Both list the options with what each costs. It takes effect on the next request - there is
+nothing to restart.
 
 ## Budgeting
 
-Two ceilings apply, and on Cloudflare's free plan the storage one binds first.
+One refresh is one TomTom call and one stored write, so a single number bounds both:
+`TRAFFIC_DAILY_REQUEST_BUDGET`. Spend it and the server keeps serving what it has, and stops
+fetching until midnight UTC.
 
-**Provider requests** — one per active area per refresh:
+What one area costs, if someone watches it all day long:
 
-```
-requests/day = 86400 / TRAFFIC_REFRESH_SECONDS × active areas
-```
+| Interval | Refreshes/day per area | Areas within a 900/day budget |
+|---|---|---|
+| 5 min | 288 | 3 |
+| 10 min | 144 | 6 |
+| 30 min | 48 | 18 |
+| 1 hour | 24 | 37 |
 
-At 30 minutes that is 48 per area per day, so the shipped ceiling of 8 areas costs 384 against
-TomTom's 2,500/day free tier. The service refuses to start if the ceiling and interval together
-exceed `TRAFFIC_DAILY_REQUEST_BUDGET`, and `/healthz` reports how much of today's budget is gone.
+Those are worst cases. Real use is a fraction of it - you are not looking at the map 24 hours a
+day, and an area you are not looking at is not refreshed at all.
 
-**Storage writes** — a refresh writes one value per area plus one for bookkeeping. Cloudflare's
-free plan allows 1,000 KV writes/day; at 30 minutes with 8 areas that is 432.
-`TRAFFIC_DAILY_WRITE_BUDGET` is checked at startup and again whenever you change the interval, so
-a bad combination fails immediately instead of half a day later. Set it to `0` for no limit —
-that is what the Docker deployment does, since disk has no such ceiling.
+The Cloudflare default is 900, which keeps you under the free plan's **1,000 KV writes/day** -
+that binds before TomTom's 2,500 calls/day does. `/healthz` reports how much of today's budget is
+gone. Docker defaults to 2,000, since disk has no write ceiling.
 
-This is also what decides which intervals you can pick. With 8 areas, 5 minutes would need 2,592
-writes/day, so on a free plan it is refused until you lower `TRAFFIC_MAX_ACTIVE_AREAS` or bind R2.
-
-Nothing below 5 minutes is offered. The app polls once a minute and treats data older than six
-minutes as outdated, so a faster refresh buys nothing and just burns quota.
-
-### If you want more areas, or a faster refresh
-
-Enable R2 on your Cloudflare account, uncomment the `[[r2_buckets]]` block in `wrangler.toml`,
-raise `TRAFFIC_DAILY_WRITE_BUDGET`, and redeploy. The Worker notices the binding and moves indexes
-and generated bodies to R2, where the volume of writes this service makes costs nothing. KV keeps
-only the small state. No code change.
+**If you want more:** enable R2 on your Cloudflare account, uncomment the `[[r2_buckets]]` block
+in `wrangler.toml`, raise `TRAFFIC_DAILY_REQUEST_BUDGET` to whatever your TomTom key allows, and
+redeploy. The Worker notices the binding and moves indexes and generated bodies to R2, where this
+volume of writes costs nothing. No code change.
 
 ## Advanced: preparing coverage on a desktop
 
@@ -253,11 +249,16 @@ left uncoloured rather than being claimed as clear.
 
 ```
 phone: Cover this area ──► road data for a bounded area ──► your server (KV / R2 / disk)
-                                                                │
-                          TomTom incidents ───────────────────► refresh (every 5 min)
-                                                                │
-phone: traffic layer ◄──── GET {version}/{Country}.traffic ◄────┘
+
+phone: traffic layer ──► GET {version}/{Country}.traffic
+                              │
+                              ├─ stored data still fresh?  ──► serve it (~1 ms)
+                              │
+                              └─ older than the interval?  ──► TomTom incidents
+                                                              ──► encode + store (~3.5 ms)
+                                                              ──► serve it
 ```
 
-The service serves stored bytes and refreshes on a timer; it never calls the provider from a
-request. That is what keeps a free TomTom tier viable against an app that polls once a minute.
+Every provider call is caused by someone actually looking at the map. There is no timer, so an
+idle server spends nothing, and the interval caps how often any one area can cost you a call no
+matter how many phones are polling it.

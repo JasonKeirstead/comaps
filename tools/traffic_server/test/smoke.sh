@@ -3,7 +3,8 @@
 #
 # No TomTom key is needed: the one provider call this makes is expected to fail with 401, which
 # is itself worth checking -- a service that cannot reach its provider must keep serving keys,
-# must 404 rather than serve stale or malformed values, and must report itself degraded.
+# must 404 rather than serve stale or malformed values, and must stay healthy: a provider that
+# cannot be reached is not the same fault as a service that is misconfigured.
 set -uo pipefail
 
 cd "$(dirname "$0")/.."
@@ -42,9 +43,15 @@ expect() {
 
 echo "Smoke test against $BASE"
 
-# 503 is the correct answer here: the provider call failed, so no area has fresh data.
-expect "healthz reports degraded with no fresh data" \
-  "$(curl -s -o /dev/null -w '%{http_code}' "$BASE/healthz")" "503"
+# 200: we hold an index for the area, so the service is configured correctly. Having no
+# generated data yet is expected -- refreshes are demand-driven, and the only request so far
+# failed at the provider.
+expect "healthz is ok when the index is present but nothing has been generated" \
+  "$(curl -s -o /dev/null -w '%{http_code}' "$BASE/healthz")" "200"
+
+expect "healthz says refreshes are on demand" \
+  "$(curl -s "$BASE/healthz" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.stdout.write(String(JSON.parse(s).refreshedOnDemand)))')" \
+  "true"
 
 expect "healthz still reports the area and its index" \
   "$(curl -s "$BASE/healthz" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.stdout.write(String(JSON.parse(s).areas[0].hasIndex)))')" \

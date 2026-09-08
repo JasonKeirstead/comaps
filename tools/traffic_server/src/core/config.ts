@@ -16,25 +16,21 @@ export interface Config {
   provider: 'tomtom';
   tomtomApiKey: string;
   /**
-   * Areas kept fresh unconditionally. With auto-discovery on (the default) this is a pinned
-   * set, not the complete set -- clients add areas by asking for them.
+   * Areas to report on in /healthz, and the ones `comaps-traffic refresh` walks.
+   *
+   * Not a coverage list: an area is served, and refreshed, because a client asks for it and we
+   * hold an index for it. Nothing here causes any provider traffic on its own.
    */
   areas: CoverageArea[];
-  /** Pick up areas from client requests instead of requiring them to be declared. */
-  autoDiscoverAreas: boolean;
-  /** Ceiling on areas refreshed per cycle, so discovery cannot exhaust a free provider tier. */
-  maxActiveAreas: number;
+  /** How stale a stored body may be before a client request refreshes it. */
   refreshSeconds: number;
-  /** Hard cap on provider requests per UTC day, to stay inside a free tier. */
-  dailyRequestBudget: number;
   /**
-   * Storage writes allowed per UTC day, or 0 for no limit.
+   * Hard cap on refreshes per UTC day, to stay inside a free tier.
    *
-   * Only the Cloudflare deployment sets this: the free plan allows 1,000 KV writes/day, which
-   * is a tighter ceiling than the provider budget and would otherwise be discovered as refreshes
-   * quietly failing partway through a day. Disk has no such limit, so the container leaves it 0.
+   * One refresh is one provider call and one stored write, so this bounds both. On Cloudflare's
+   * free plan the binding limit is KV's 1,000 writes/day rather than TomTom's 2,500 calls.
    */
-  dailyWriteBudget: number;
+  dailyRequestBudget: number;
   /** Serve without an API key. Reasonable on a trusted LAN, not on the public internet. */
   allowAnonymous: boolean;
   /** A fixed key, as an alternative to QR pairing. */
@@ -53,14 +49,12 @@ export type Env = Record<string, string | undefined>;
 /**
  * The refresh intervals an operator may choose, in seconds.
  *
- * A closed list rather than a free number because the Cloudflare cron fires at a fixed cadence
- * and the interval is enforced against it in code: every choice must be a whole multiple of the
- * smallest one, or a refresh would land between ticks and run late by up to one tick.
+ * This is a staleness bound, not a schedule: a stored body older than this is refreshed by the
+ * next client request for it, and nothing happens in between. Nothing shorter than 5 minutes is
+ * offered because the client polls once a minute and a shorter bound would spend provider quota
+ * on data that has barely changed.
  */
 export const REFRESH_CHOICES = [300, 600, 1800, 3600] as const;
-
-/** The cron cadence, and so the resolution at which any longer interval can be honoured. */
-export const REFRESH_TICK_SECONDS = REFRESH_CHOICES[0];
 
 export const describeRefresh = (seconds: number): string =>
   seconds % 3600 === 0 ? `${seconds / 3600}h` : `${Math.round(seconds / 60)} min`;
@@ -109,14 +103,8 @@ export function loadConfig(env: Env): Config {
     provider: 'tomtom',
     tomtomApiKey: env.TOMTOM_API_KEY ?? '',
     areas: parseAreas(env.TRAFFIC_AREAS),
-    autoDiscoverAreas: bool(env, 'TRAFFIC_AUTO_DISCOVER_AREAS', true),
-    // At the 30 min default this is 288 provider requests and 336 writes/day -- comfortable.
-    // It is deliberately not raised further: the interval is settable at runtime, and a high
-    // ceiling here would make the shorter intervals unpickable on a free account.
-    maxActiveAreas: num(env, 'TRAFFIC_MAX_ACTIVE_AREAS', 6),
     refreshSeconds: num(env, 'TRAFFIC_REFRESH_SECONDS', 1800),
     dailyRequestBudget: num(env, 'TRAFFIC_DAILY_REQUEST_BUDGET', 2000),
-    dailyWriteBudget: num(env, 'TRAFFIC_DAILY_WRITE_BUDGET', 0),
     allowAnonymous: bool(env, 'TRAFFIC_ALLOW_ANONYMOUS', false),
     staticApiKey: env.TRAFFIC_API_KEY ?? '',
     adminToken: env.TRAFFIC_ADMIN_TOKEN ?? '',
@@ -141,9 +129,6 @@ export function loadConfig(env: Env): Config {
 export function validateConfig(config: Config): string[] {
   const errors: string[] = [];
   if (!config.tomtomApiKey) errors.push('TOMTOM_API_KEY is required');
-  if (config.areas.length === 0 && !config.autoDiscoverAreas) {
-    errors.push('set TRAFFIC_AREAS, or leave TRAFFIC_AUTO_DISCOVER_AREAS on so clients can add areas themselves');
-  }
   if (!(REFRESH_CHOICES as readonly number[]).includes(config.refreshSeconds)) {
     errors.push(
       `TRAFFIC_REFRESH_SECONDS must be one of ${REFRESH_CHOICES.join(', ')}, got ${config.refreshSeconds}`,
@@ -155,48 +140,20 @@ export function validateConfig(config: Config): string[] {
     );
   }
 
-  errors.push(...budgetErrors(config, config.refreshSeconds));
+  if (config.dailyRequestBudget <= 0) {
+    errors.push('TRAFFIC_DAILY_REQUEST_BUDGET must be positive; it is the only cap on provider spend');
+  }
   return errors;
 }
 
 /**
- * Whether an interval fits the configured budgets. Split out of validateConfig because the
- * interval is also settable at runtime, and picking one the account cannot afford has to be
- * refused there with the same arithmetic and the same wording.
+ * How many refreshes a day one area costs at a given interval.
+ *
+ * Only an upper bound, and only reached while someone actually has that area on screen -- an
+ * area nobody is looking at costs nothing at all.
  */
-export function budgetErrors(config: Config, refreshSeconds: number): string[] {
-  const errors: string[] = [];
+export const refreshesPerAreaPerDay = (refreshSeconds: number): number => 86400 / refreshSeconds;
 
-  // At one provider request per area per refresh. With discovery on, the worst case is the
-  // ceiling rather than the pinned list, so check against that.
-  const worstCaseAreas = config.autoDiscoverAreas
-    ? Math.max(config.areas.length, config.maxActiveAreas)
-    : config.areas.length;
-  const ticksPerDay = 86400 / refreshSeconds;
-
-  const perDay = ticksPerDay * worstCaseAreas;
-  if (perDay > config.dailyRequestBudget) {
-    errors.push(
-      `${worstCaseAreas} area(s) refreshed every ${describeRefresh(refreshSeconds)} needs ` +
-        `${Math.ceil(perDay)} provider requests/day, over the ${config.dailyRequestBudget} budget. ` +
-        'Choose a longer refresh interval, or lower TRAFFIC_MAX_ACTIVE_AREAS.',
-    );
-  }
-
-  // Each refreshed area writes its generated body, and the tick's bookkeeping is written
-  // alongside. Catching this beats the alternative: KV starts rejecting writes partway through
-  // the day and traffic silently stops updating while every endpoint still looks healthy.
-  if (config.dailyWriteBudget > 0) {
-    const writesPerDay = ticksPerDay * (worstCaseAreas + 1);
-    if (writesPerDay > config.dailyWriteBudget) {
-      errors.push(
-        `${worstCaseAreas} area(s) refreshed every ${describeRefresh(refreshSeconds)} needs ` +
-          `${Math.ceil(writesPerDay)} storage writes/day, over the ${config.dailyWriteBudget} budget. ` +
-          'Choose a longer refresh interval, lower TRAFFIC_MAX_ACTIVE_AREAS, or bind R2 and raise ' +
-          'TRAFFIC_DAILY_WRITE_BUDGET.',
-      );
-    }
-  }
-
-  return errors;
-}
+/** How many areas can be watched continuously at this interval before the budget runs out. */
+export const areasWithinBudget = (config: Config, refreshSeconds: number): number =>
+  Math.floor(config.dailyRequestBudget / refreshesPerAreaPerDay(refreshSeconds));

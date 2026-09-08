@@ -6,7 +6,7 @@
  *   comaps-traffic devices         list paired devices
  *   comaps-traffic revoke <id>     revoke one device
  *   comaps-traffic refresh         run a refresh now, whether or not one is due
- *   comaps-traffic interval [s]    show or set the refresh interval
+ *   comaps-traffic interval [s]    show or set how stale data may get before a request refreshes it
  *   comaps-traffic check           validate configuration and indexes
  *
  * Works directly against the storage directory, so `docker exec <container> comaps-traffic pair`
@@ -16,7 +16,7 @@
 
 import QRCode from 'qrcode';
 import { describeRefresh, loadConfig, validateConfig } from '../core/config.ts';
-import { affordableChoices, getRefresh, setRefresh } from '../core/settings.ts';
+import { describeChoices, getRefresh, setRefresh } from '../core/settings.ts';
 import { parseTrafficIndex } from '../core/index/format.ts';
 import { createPairingToken, listDevices, pairingUri, revokeDevice } from '../core/pairing.ts';
 import { refreshAll } from '../refresh.ts';
@@ -75,10 +75,13 @@ async function interval(raw: string | undefined): Promise<void> {
   if (raw === undefined) {
     const current = await getRefresh(storage, config);
     console.log(`Refresh interval: ${describeRefresh(current.seconds)} (from ${current.source})`);
-    for (const option of affordableChoices(config)) {
+    console.log('              per watched area   areas within budget');
+    for (const option of describeChoices(config)) {
       const mark = option.seconds === current.seconds ? '*' : ' ';
-      const note = option.affordable ? '' : `  -- too often for this budget: ${option.why}`;
-      console.log(` ${mark} ${String(option.seconds).padStart(4)}  ${option.label}${note}`);
+      console.log(
+        ` ${mark} ${String(option.seconds).padStart(4)}  ${option.label.padEnd(8)}` +
+          `${String(option.perAreaPerDay).padStart(6)}/day      ${option.areasWithinBudget}`,
+      );
     }
     return;
   }
@@ -88,7 +91,7 @@ async function interval(raw: string | undefined): Promise<void> {
     for (const e of result.errors) console.error(`  ! ${e}`);
     process.exit(1);
   }
-  console.log(`Refresh interval set to ${describeRefresh(result.seconds)}. Takes effect on the next tick.`);
+  console.log(`Refresh interval set to ${describeRefresh(result.seconds)}. Takes effect on the next request.`);
 }
 
 async function main(): Promise<void> {

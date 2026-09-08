@@ -10,7 +10,7 @@
 
 import { isAdmin, isAuthorized } from '../core/auth.ts';
 import type { Config } from '../core/config.ts';
-import { activeAreas, recordDemand } from '../core/demand.ts';
+import type { TrafficProvider } from '../core/providers/types.ts';
 import { etagMatches } from '../core/etag.ts';
 import { parseTrafficIndex } from '../core/index/format.ts';
 import {
@@ -21,12 +21,15 @@ import {
   redeemPairingToken,
   revokeDevice,
 } from '../core/pairing.ts';
-import { affordableChoices, getRefresh, setRefresh } from '../core/settings.ts';
+import { describeChoices, getRefresh, setRefresh } from '../core/settings.ts';
+import { refreshArea } from '../refresh.ts';
 import type { Storage } from '../storage/types.ts';
 
 export interface RouterContext {
   config: Config;
   storage: Storage;
+  /** Injected by tests; production builds one from the config on first use. */
+  provider?: TrafficProvider;
 }
 
 /**
@@ -98,12 +101,6 @@ export async function handleRequest(request: Request, ctx: RouterContext): Promi
     });
   }
 
-  const version = await resolveVersion(ctx, parsed);
-  if (version !== null) {
-    // Discovery: the client asking is what puts an area on the refresh list.
-    await recordDemand(ctx.storage, parsed.country, version, ctx.config);
-  }
-
   return parsed.wantsKeys ? await handleKeys(ctx, parsed) : await handleValues(request, ctx, parsed);
 }
 
@@ -158,9 +155,7 @@ async function handleIndexUpload(request: Request, ctx: RouterContext): Promise<
   }
 
   await ctx.storage.writeIndex(country, mapVersion, body);
-  // Register it immediately so the next cron picks it up without waiting for another poll.
-  await recordDemand(ctx.storage, country, mapVersion, ctx.config);
-
+  // Nothing else to register: the client's next poll for this area is what generates data for it.
   return json({ status: 'stored', country, mapVersion, segments: parsed.segmentCount });
 }
 
@@ -211,8 +206,14 @@ async function handleValues(request: Request, ctx: RouterContext, parsed: Traffi
   const version = await resolveVersion(ctx, parsed);
   if (version === null) return await notFoundWithVersion(ctx, parsed);
 
-  const blob = await ctx.storage.readGenerated(parsed.country, version);
-  if (!blob) return await notFoundWithVersion(ctx, parsed);
+  // This request is the trigger. If what we hold is still inside the chosen interval it comes
+  // straight back; otherwise this call is what goes to the provider. Nothing refreshes an area
+  // that nobody is asking for.
+  const { blob, result } = await refreshArea(ctx.config, ctx.storage, parsed.country, version, ctx.provider);
+  if (!blob) {
+    if (result.status === 'failed' && result.detail) console.warn(`${parsed.country}@${version}: ${result.detail}`);
+    return await notFoundWithVersion(ctx, parsed);
+  }
 
   if (etagMatches(request.headers.get('if-none-match'), blob.etag)) {
     // The client keeps the tag it sent, so we must keep honouring it.
@@ -228,6 +229,7 @@ async function handleValues(request: Request, ctx: RouterContext, parsed: Traffi
       'cache-control': 'no-cache',
       'x-traffic-generated-at': new Date(blob.generatedAt).toISOString(),
       'x-traffic-colored-segments': String(blob.coloredSegments),
+      'x-traffic-refresh': result.status,
     },
   });
 }
@@ -268,7 +270,7 @@ async function handleAdmin(request: Request, ctx: RouterContext, path: string): 
 
   if (path === '/admin/refresh-interval' && request.method === 'GET') {
     const current = await getRefresh(ctx.storage, ctx.config);
-    return json({ ...current, options: affordableChoices(ctx.config) });
+    return json({ ...current, options: describeChoices(ctx.config) });
   }
 
   if (path === '/admin/refresh-interval' && request.method === 'PUT') {
@@ -296,38 +298,51 @@ async function handleAdmin(request: Request, ctx: RouterContext, path: string): 
 
 async function handleHealth(ctx: RouterContext): Promise<Response> {
   const now = Date.now();
+  const refresh = await getRefresh(ctx.storage, ctx.config);
+
   const areas = [];
   for (const area of ctx.config.areas) {
     const blob = await ctx.storage.readGenerated(area.country, area.mapVersion);
     const hasIndex = (await ctx.storage.readIndex(area.country, area.mapVersion)) !== null;
+    const ageSeconds = blob ? Math.round((now - blob.generatedAt) / 1000) : null;
     areas.push({
       country: area.country,
       mapVersion: area.mapVersion,
       hasIndex,
       generatedAt: blob ? new Date(blob.generatedAt).toISOString() : null,
-      ageSeconds: blob ? Math.round((now - blob.generatedAt) / 1000) : null,
+      ageSeconds,
       coloredSegments: blob?.coloredSegments ?? null,
+      // Not a health signal. Data goes stale simply because nobody is looking at the area, and
+      // the next request for it is what refreshes it.
+      refreshOnNextRequest: ageSeconds === null || ageSeconds >= refresh.seconds,
     });
   }
 
   const budgetRaw = await ctx.storage.getState(`quota/${new Date().toISOString().slice(0, 10)}`);
   const used = budgetRaw ? Number(budgetRaw) : 0;
 
-  const refresh = await getRefresh(ctx.storage, ctx.config);
+  // What actually stops this service working: an area we are asked about but hold no index for
+  // (nothing can ever be generated), or a spent budget (refreshes are skipped until midnight).
+  // Stale data is not a fault -- since refreshes are demand-driven, an idle service is stale by
+  // design, and reporting that as degraded would make the signal useless.
+  const missingIndex = areas.filter((a) => !a.hasIndex).map((a) => `${a.country}@${a.mapVersion}`);
+  const budgetSpent = used >= ctx.config.dailyRequestBudget;
 
-  // Stale beyond twice the refresh interval is worth flagging. Measured against the interval in
-  // force, not the configured one, or every deployment with an override would look broken.
-  const stale = areas.some((a) => a.ageSeconds === null || a.ageSeconds > refresh.seconds * 2);
+  const problems: string[] = [];
+  if (missingIndex.length > 0) problems.push(`no index for ${missingIndex.join(', ')}; cover the area from the app`);
+  if (budgetSpent) problems.push(`daily budget of ${ctx.config.dailyRequestBudget} spent; serving stored data until 00:00 UTC`);
 
   return json(
     {
-      status: stale ? 'degraded' : 'ok',
+      status: problems.length > 0 ? 'degraded' : 'ok',
+      problems,
       refreshSeconds: refresh.seconds,
       refreshSource: refresh.source,
+      refreshedOnDemand: true,
       providerRequestsToday: used,
       providerDailyBudget: ctx.config.dailyRequestBudget,
       areas,
     },
-    stale ? 503 : 200,
+    problems.length > 0 ? 503 : 200,
   );
 }

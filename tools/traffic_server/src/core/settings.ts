@@ -7,7 +7,7 @@
  * what it costs you.
  */
 
-import { budgetErrors, describeRefresh, REFRESH_CHOICES, type Config } from './config.ts';
+import { areasWithinBudget, describeRefresh, refreshesPerAreaPerDay, REFRESH_CHOICES, type Config } from './config.ts';
 import type { Storage } from '../storage/types.ts';
 
 const REFRESH_KEY = 'settings/refreshSeconds';
@@ -44,13 +44,6 @@ export type SetRefreshResult =
   | { ok: true; seconds: number }
   | { ok: false; status: number; errors: string[] };
 
-/**
- * Changes the interval, refusing anything the configured budgets cannot pay for.
- *
- * The refusal matters more than the setting: shortening the interval is exactly the change that
- * quietly exhausts a free tier, and the failure shows up hours later as traffic that has stopped
- * updating while every endpoint still reports healthy.
- */
 export async function setRefresh(
   storage: Storage,
   config: Config,
@@ -64,22 +57,31 @@ export async function setRefresh(
     };
   }
 
-  const errors = budgetErrors(config, seconds);
-  if (errors.length > 0) return { ok: false, status: 409, errors };
-
   await storage.putState(REFRESH_KEY, String(seconds));
   return { ok: true, seconds };
 }
 
-/** The choices, annotated with whether this deployment can actually afford each one. */
-export function affordableChoices(config: Config): { seconds: number; label: string; affordable: boolean; why?: string }[] {
-  return REFRESH_CHOICES.map((seconds) => {
-    const errors = budgetErrors(config, seconds);
-    return {
-      seconds,
-      label: describeRefresh(seconds),
-      affordable: errors.length === 0,
-      ...(errors.length > 0 ? { why: errors[0] } : {}),
-    };
-  });
+export interface RefreshChoice {
+  seconds: number;
+  label: string;
+  /** Refreshes one continuously-watched area costs per day at this interval. */
+  perAreaPerDay: number;
+  /** How many areas can be watched all day at this interval before the budget runs out. */
+  areasWithinBudget: number;
+}
+
+/**
+ * The choices, with what each one costs.
+ *
+ * Deliberately not a pass/fail: since a refresh only happens when someone asks, the real spend
+ * depends on how much the service is used, and no setting can be ruled out in advance. What is
+ * worth showing is how many areas you could watch continuously before the daily budget stops you.
+ */
+export function describeChoices(config: Config): RefreshChoice[] {
+  return REFRESH_CHOICES.map((seconds) => ({
+    seconds,
+    label: describeRefresh(seconds),
+    perAreaPerDay: refreshesPerAreaPerDay(seconds),
+    areasWithinBudget: areasWithinBudget(config, seconds),
+  }));
 }

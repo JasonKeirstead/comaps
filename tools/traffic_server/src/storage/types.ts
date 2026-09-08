@@ -30,19 +30,3 @@ export interface Storage {
 
 export const indexKey = (country: string, mapVersion: number) => `index/${mapVersion}/${country}.cmti`;
 export const generatedKey = (country: string, mapVersion: number) => `generated/${mapVersion}/${country}.traffic`;
-
-/**
- * An area a client has actually asked for recently.
- *
- * Areas are discovered from traffic, not declared in config: a phone downloads a map, requests
- * traffic for it, and the refresh job picks it up. When a map version changes the client starts
- * asking for the new one and the old entry simply ages out. That also bounds provider spend to
- * maps someone is looking at, rather than everything ever configured.
- */
-export interface DemandRecord {
-  country: string;
-  mapVersion: number;
-  lastRequestedAt: number;
-}
-
-export const demandKey = (country: string, mapVersion: number) => `demand/${mapVersion}/${country}`;

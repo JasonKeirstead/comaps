@@ -7,6 +7,7 @@ import { generateTraffic } from '../src/core/pipeline.ts';
 import { parseTrafficIndex } from '../src/core/index/format.ts';
 import { SpeedGroup } from '../src/core/speed-groups.ts';
 import type { GeneratedBlob, Storage } from '../src/storage/types.ts';
+import type { TrafficProvider } from '../src/core/providers/types.ts';
 import { buildIndex } from './helpers/build-index.ts';
 
 const COUNTRY = 'Belarus_Minsk Region';
@@ -92,6 +93,58 @@ const url = (path: string) => `http://server${path}`;
 const encoded = encodeURIComponent(COUNTRY);
 const get = (path: string, headers: Record<string, string> = {}) =>
   new Request(url(path), { headers: { 'x-api-key': 'secret-key', ...headers } });
+
+/** Records provider calls so a test can prove a request did or did not cause one. */
+function countingProvider(group = SpeedGroup.G1): TrafficProvider & { calls: number } {
+  const provider = {
+    name: 'counting' as const,
+    calls: 0,
+    async fetch() {
+      provider.calls += 1;
+      return [{ geometry: [[53.9, 27.5599], [53.9, 27.5601]] as [number, number][], group }];
+    },
+  };
+  return provider;
+}
+
+test('a request for a stale area is what refreshes it', async () => {
+  const { storage, ctx } = setup();
+  const provider = countingProvider();
+
+  // Age what we hold past the interval.
+  const held = storage.generated.get(`${VERSION}/${COUNTRY}`)!;
+  storage.generated.set(`${VERSION}/${COUNTRY}`, { ...held, generatedAt: Date.now() - 2 * 3600 * 1000 });
+
+  const res = await handleRequest(get(`/traffic/${VERSION}/${encoded}.traffic`), { ...ctx, provider });
+
+  assert.equal(res.status, 200);
+  assert.equal(provider.calls, 1);
+  assert.equal(res.headers.get('x-traffic-refresh'), 'updated');
+});
+
+test('a request for a fresh area serves storage and never touches the provider', async () => {
+  const { ctx } = setup();
+  const provider = countingProvider();
+
+  const res = await handleRequest(get(`/traffic/${VERSION}/${encoded}.traffic`), { ...ctx, provider });
+
+  assert.equal(res.status, 200);
+  assert.equal(provider.calls, 0, 'fresh data must not cost a provider call');
+  assert.equal(res.headers.get('x-traffic-refresh'), 'fresh');
+});
+
+test('an unauthorised request cannot cause a provider call', async () => {
+  const { storage, ctx } = setup();
+  const provider = countingProvider();
+  const held = storage.generated.get(`${VERSION}/${COUNTRY}`)!;
+  storage.generated.set(`${VERSION}/${COUNTRY}`, { ...held, generatedAt: Date.now() - 2 * 3600 * 1000 });
+
+  // Otherwise anyone who can reach the port could spend the operator's provider quota.
+  const res = await handleRequest(new Request(url(`/traffic/${VERSION}/${encoded}.traffic`)), { ...ctx, provider });
+
+  assert.equal(res.status, 401);
+  assert.equal(provider.calls, 0);
+});
 
 test('parses the path shapes the client actually builds', () => {
   assert.deepEqual(parseTrafficPath(`/traffic/250628/${encoded}.traffic`), {
@@ -249,17 +302,8 @@ test('config parsing and budget validation', () => {
   ]);
   assert.throws(() => parseAreas('NoVersion'), /Country@version/);
 
-  // 8 areas every 5 minutes is 2304 provider requests/day, over a 2000 budget.
-  const tight = loadConfig({
-    TOMTOM_API_KEY: 'k',
-    TRAFFIC_ALLOW_ANONYMOUS: 'true',
-    TRAFFIC_REFRESH_SECONDS: '300',
-    TRAFFIC_AREAS: 'A@1,B@1,C@1,D@1,E@1,F@1,G@1,H@1',
-  });
-  assert.match(validateConfig(tight).join('\n'), /over the 2000 budget/);
-
-  // An interval outside the choice list is refused: the cron ticks at the shortest choice, so
-  // an arbitrary number would just be rounded up to a tick boundary without saying so.
+  // An interval outside the choice list is refused. The list is closed because it is what the
+  // apps and docs present as the available settings, not an arbitrary number.
   const odd = loadConfig({
     TOMTOM_API_KEY: 'k',
     TRAFFIC_ALLOW_ANONYMOUS: 'true',

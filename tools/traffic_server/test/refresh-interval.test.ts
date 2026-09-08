@@ -1,20 +1,23 @@
 /**
- * The refresh interval as a setting: chosen from a fixed list, changeable at runtime, and
- * actually honoured by the refresh job.
+ * The refresh interval as a setting, and the demand-driven refresh it governs.
  *
- * The last part is the one worth guarding. Before this, the Cloudflare cron *was* the interval,
- * so TRAFFIC_REFRESH_SECONDS only affected validation and /healthz -- changing it looked like it
- * worked and changed nothing about how often the provider was called.
+ * The behaviour worth pinning down: an area is refreshed because a client asked for it, at most
+ * once per interval, and never otherwise. Nothing runs on a timer, so a service nobody is using
+ * makes no provider calls.
  */
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { loadConfig, REFRESH_CHOICES, type Config } from '../src/core/config.ts';
-import { affordableChoices, getRefresh, setRefresh } from '../src/core/settings.ts';
-import { refreshAll } from '../src/refresh.ts';
+import { describeChoices, getRefresh, setRefresh } from '../src/core/settings.ts';
+import { refreshArea } from '../src/refresh.ts';
 import type { GeneratedBlob, Storage } from '../src/storage/types.ts';
 import type { TrafficProvider } from '../src/core/providers/types.ts';
+import { buildIndex } from './helpers/build-index.ts';
+
+const COUNTRY = 'Belarus_Minsk Region';
+const VERSION = 250628;
 
 class MemoryStorage implements Storage {
   indexes = new Map<string, ArrayBuffer>();
@@ -60,7 +63,6 @@ function config(overrides: Record<string, string> = {}): Config {
   return loadConfig({ TOMTOM_API_KEY: 'k', TRAFFIC_ALLOW_ANONYMOUS: 'true', ...overrides });
 }
 
-/** Counts provider calls; the index is never read because no area is ever configured as present. */
 function countingProvider(): TrafficProvider & { calls: number } {
   const provider = {
     name: 'counting' as const,
@@ -71,6 +73,25 @@ function countingProvider(): TrafficProvider & { calls: number } {
     },
   };
   return provider;
+}
+
+/** A storage already holding a usable index for COUNTRY@VERSION. */
+async function storageWithIndex(): Promise<MemoryStorage> {
+  const storage = new MemoryStorage();
+  storage.indexes.set(
+    `${VERSION}/${COUNTRY}`,
+    buildIndex({
+      countryName: COUNTRY,
+      mwmVersion: VERSION,
+      features: [{ fid: 3, numSegs: 2, oneWay: true }],
+      segments: [
+        { segmentIndex: 0, lat: 53.9, lon: 27.56, bearingDeg: 90 },
+        { segmentIndex: 1, lat: 53.91, lon: 27.57, bearingDeg: 90 },
+      ],
+      bbox: { minLat: 53.8, minLon: 27.4, maxLat: 54.0, maxLon: 27.7 },
+    }),
+  );
+  return storage;
 }
 
 test('the default interval is 30 minutes', () => {
@@ -92,8 +113,7 @@ test('an override takes precedence and is reported as such', async () => {
   const storage = new MemoryStorage();
   const cfg = config({ TRAFFIC_REFRESH_SECONDS: '1800' });
 
-  const result = await setRefresh(storage, cfg, 3600);
-  assert.equal(result.ok, true);
+  assert.equal((await setRefresh(storage, cfg, 3600)).ok, true);
 
   const current = await getRefresh(storage, cfg);
   assert.equal(current.seconds, 3600);
@@ -101,32 +121,12 @@ test('an override takes precedence and is reported as such', async () => {
 });
 
 test('an interval outside the list is rejected', async () => {
-  const storage = new MemoryStorage();
-  const result = await setRefresh(storage, config(), 900);
+  const result = await setRefresh(new MemoryStorage(), config(), 900);
   assert.equal(result.ok, false);
   if (!result.ok) {
     assert.equal(result.status, 400);
     assert.match(result.errors.join(' '), /one of 300, 600, 1800, 3600/);
   }
-});
-
-test('an interval the budget cannot pay for is rejected, not silently accepted', async () => {
-  const storage = new MemoryStorage();
-  // 8 areas every 5 minutes is 2,592 KV writes/day against a free plan's 1,000.
-  const cfg = config({
-    TRAFFIC_MAX_ACTIVE_AREAS: '8',
-    TRAFFIC_DAILY_WRITE_BUDGET: '1000',
-    TRAFFIC_DAILY_REQUEST_BUDGET: '100000',
-  });
-
-  const result = await setRefresh(storage, cfg, 300);
-  assert.equal(result.ok, false);
-  if (!result.ok) {
-    assert.equal(result.status, 409);
-    assert.match(result.errors.join(' '), /storage writes\/day/);
-  }
-  // And nothing was stored, so the service keeps running at the interval it had.
-  assert.equal((await getRefresh(storage, cfg)).source, 'environment');
 });
 
 test('a stored override that is no longer a valid choice falls back instead of wedging', async () => {
@@ -138,62 +138,135 @@ test('a stored override that is no longer a valid choice falls back instead of w
   assert.equal(current.source, 'environment');
 });
 
-test('affordableChoices marks the ones this deployment cannot pay for', () => {
-  const cfg = config({
-    TRAFFIC_MAX_ACTIVE_AREAS: '8',
-    TRAFFIC_DAILY_WRITE_BUDGET: '1000',
-    TRAFFIC_DAILY_REQUEST_BUDGET: '2000',
-  });
-  const options = affordableChoices(cfg);
+test('each choice reports what it costs and how many areas the budget covers', () => {
+  const options = describeChoices(config({ TRAFFIC_DAILY_REQUEST_BUDGET: '900' }));
 
   assert.deepEqual(options.map((o) => o.label), ['5 min', '10 min', '30 min', '1h']);
-  assert.equal(options.find((o) => o.seconds === 300)?.affordable, false);
-  assert.equal(options.find((o) => o.seconds === 1800)?.affordable, true);
-  assert.ok(options.find((o) => o.seconds === 300)?.why);
+  assert.equal(options.find((o) => o.seconds === 1800)?.perAreaPerDay, 48);
+  assert.equal(options.find((o) => o.seconds === 1800)?.areasWithinBudget, 18);
+  // Shorter intervals cost more per area, so fewer fit.
+  assert.equal(options.find((o) => o.seconds === 300)?.areasWithinBudget, 3);
 });
 
-test('refreshAll does nothing until the chosen interval has elapsed', async () => {
-  const storage = new MemoryStorage();
-  const cfg = config({ TRAFFIC_AREAS: 'A@1', TRAFFIC_REFRESH_SECONDS: '1800' });
+test('the first request for an area refreshes it', async () => {
+  const storage = await storageWithIndex();
   const provider = countingProvider();
 
-  // First call: nothing has run, so it is due. The area has no index, so it fails -- but the
-  // point is that it got as far as trying.
-  const first = await refreshAll(cfg, storage, provider);
-  assert.equal(first.length, 1);
-  assert.equal(first[0].status, 'failed');
-
-  // Second call moments later: not due, so no areas are even considered.
-  const second = await refreshAll(cfg, storage, provider);
-  assert.deepEqual(second, []);
+  const { blob, result } = await refreshArea(config(), storage, COUNTRY, VERSION, provider);
+  assert.equal(result.status, 'updated');
+  assert.equal(provider.calls, 1);
+  assert.ok(blob);
 });
 
-test('a tick that is not due costs one read and touches nothing else', async () => {
-  const storage = new MemoryStorage();
-  const cfg = config({ TRAFFIC_AREAS: 'A@1' });
+test('a second request inside the interval is served from storage, with no provider call', async () => {
+  const storage = await storageWithIndex();
+  const provider = countingProvider();
+  const cfg = config({ TRAFFIC_REFRESH_SECONDS: '1800' });
 
-  await refreshAll(cfg, storage, countingProvider());
-  const stateAfterFirst = new Map(storage.state);
+  await refreshArea(cfg, storage, COUNTRY, VERSION, provider);
+  const { blob, result } = await refreshArea(cfg, storage, COUNTRY, VERSION, provider);
 
-  await refreshAll(cfg, storage, countingProvider());
-  // No new keys, and no value changed: an idle tick must not spend write quota.
-  assert.deepEqual([...storage.state.entries()], [...stateAfterFirst.entries()]);
+  assert.equal(result.status, 'fresh');
+  assert.equal(provider.calls, 1, 'the provider must not be called again inside the interval');
+  assert.ok(blob);
 });
 
-test('the interval is re-read each tick, so a change takes effect without a restart', async () => {
-  const storage = new MemoryStorage();
-  const cfg = config({ TRAFFIC_AREAS: 'A@1', TRAFFIC_REFRESH_SECONDS: '3600' });
+test('once the interval has passed, the next request refreshes', async () => {
+  const storage = await storageWithIndex();
+  const provider = countingProvider();
+  const cfg = config({ TRAFFIC_REFRESH_SECONDS: '300' });
 
-  await refreshAll(cfg, storage, countingProvider());
-  assert.deepEqual(await refreshAll(cfg, storage, countingProvider()), []);
+  await refreshArea(cfg, storage, COUNTRY, VERSION, provider);
 
-  // Backdate the last run by ten minutes, then shorten the interval to five.
-  storage.state.set('refresh/lastAt', String(Date.now() - 10 * 60 * 1000));
-  assert.deepEqual(await refreshAll(cfg, storage, countingProvider()), []);
+  // Backdate what we hold by six minutes.
+  const held = storage.generated.get(`${VERSION}/${COUNTRY}`)!;
+  storage.generated.set(`${VERSION}/${COUNTRY}`, { ...held, generatedAt: Date.now() - 6 * 60 * 1000 });
 
-  const set = await setRefresh(storage, cfg, 300);
-  assert.equal(set.ok, true);
+  const { result } = await refreshArea(cfg, storage, COUNTRY, VERSION, provider);
+  assert.equal(result.status, 'updated');
+  assert.equal(provider.calls, 2);
+});
 
-  const after = await refreshAll(cfg, storage, countingProvider());
-  assert.equal(after.length, 1);
+test('an area nobody asks for is never refreshed', async () => {
+  const storage = await storageWithIndex();
+  const provider = countingProvider();
+
+  // Simply not calling refreshArea is the whole point: there is no timer that would.
+  assert.equal(provider.calls, 0);
+  assert.equal(await storage.readGenerated(COUNTRY, VERSION), null);
+});
+
+test('a refresh already in progress serves what we have rather than calling the provider again', async () => {
+  const storage = await storageWithIndex();
+  const provider = countingProvider();
+  const cfg = config({ TRAFFIC_REFRESH_SECONDS: '300' });
+
+  await refreshArea(cfg, storage, COUNTRY, VERSION, provider);
+  const held = storage.generated.get(`${VERSION}/${COUNTRY}`)!;
+  storage.generated.set(`${VERSION}/${COUNTRY}`, { ...held, generatedAt: Date.now() - 6 * 60 * 1000 });
+
+  // Pretend another request got there first.
+  await storage.putState(`refreshing/${VERSION}/${COUNTRY}`, '1');
+
+  const { blob, result } = await refreshArea(cfg, storage, COUNTRY, VERSION, provider);
+  assert.equal(result.status, 'skipped');
+  assert.match(result.detail ?? '', /already in progress/);
+  assert.equal(provider.calls, 1);
+  assert.ok(blob, 'stale data still beats no data');
+});
+
+test('the daily budget stops provider calls but keeps serving', async () => {
+  const storage = await storageWithIndex();
+  const provider = countingProvider();
+  const cfg = config({ TRAFFIC_REFRESH_SECONDS: '300', TRAFFIC_DAILY_REQUEST_BUDGET: '1' });
+
+  await refreshArea(cfg, storage, COUNTRY, VERSION, provider);
+  const held = storage.generated.get(`${VERSION}/${COUNTRY}`)!;
+  storage.generated.set(`${VERSION}/${COUNTRY}`, { ...held, generatedAt: Date.now() - 6 * 60 * 1000 });
+
+  const { blob, result } = await refreshArea(cfg, storage, COUNTRY, VERSION, provider);
+  assert.equal(result.status, 'skipped');
+  assert.match(result.detail ?? '', /budget/);
+  assert.equal(provider.calls, 1);
+  assert.ok(blob);
+});
+
+test('a provider failure leaves the previous body in place', async () => {
+  const storage = await storageWithIndex();
+  const cfg = config({ TRAFFIC_REFRESH_SECONDS: '300' });
+
+  const good = countingProvider();
+  await refreshArea(cfg, storage, COUNTRY, VERSION, good);
+  const before = storage.generated.get(`${VERSION}/${COUNTRY}`)!;
+  storage.generated.set(`${VERSION}/${COUNTRY}`, { ...before, generatedAt: Date.now() - 6 * 60 * 1000 });
+
+  const broken: TrafficProvider = {
+    name: 'broken',
+    async fetch() {
+      throw new Error('TomTom request failed: 401');
+    },
+  };
+  const { blob, result } = await refreshArea(cfg, storage, COUNTRY, VERSION, broken);
+
+  assert.equal(result.status, 'failed');
+  assert.ok(blob, 'an outage must degrade to stale data, not to no data');
+  assert.deepEqual([...blob.body], [...before.body]);
+  // And the in-flight marker was cleared, so the next request can try again.
+  assert.equal(await storage.getState(`refreshing/${VERSION}/${COUNTRY}`), null);
+});
+
+test('the interval is read per request, so a change takes effect immediately', async () => {
+  const storage = await storageWithIndex();
+  const provider = countingProvider();
+  const cfg = config({ TRAFFIC_REFRESH_SECONDS: '3600' });
+
+  await refreshArea(cfg, storage, COUNTRY, VERSION, provider);
+  const held = storage.generated.get(`${VERSION}/${COUNTRY}`)!;
+  storage.generated.set(`${VERSION}/${COUNTRY}`, { ...held, generatedAt: Date.now() - 10 * 60 * 1000 });
+
+  // Ten minutes old, but the interval is an hour, so still fresh.
+  assert.equal((await refreshArea(cfg, storage, COUNTRY, VERSION, provider)).result.status, 'fresh');
+
+  assert.equal((await setRefresh(storage, cfg, 300)).ok, true);
+  assert.equal((await refreshArea(cfg, storage, COUNTRY, VERSION, provider)).result.status, 'updated');
 });
